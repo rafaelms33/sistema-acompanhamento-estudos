@@ -1,5 +1,6 @@
 import hashlib
 import hmac
+import html as html_lib
 import os
 import re
 import sqlite3
@@ -85,8 +86,22 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-st.markdown(
-    """
+def render_html(conteudo: str):
+    """Renderiza HTML/CSS no Streamlit sem exibir o código como texto."""
+    if hasattr(st, "html"):
+        st.html(conteudo)
+    else:
+        st.markdown(conteudo, unsafe_allow_html=True)
+
+
+def escape_html(valor):
+    """Evita que textos vindos do banco quebrem o HTML dos cards."""
+    if valor is None or (isinstance(valor, float) and pd.isna(valor)):
+        return ""
+    return html_lib.escape(str(valor))
+
+
+render_html("""
     <style>
       :root { color-scheme: light; }
       .block-container { padding-top: 1.25rem; padding-bottom: 2rem; max-width: 1480px; }
@@ -140,9 +155,7 @@ st.markdown(
       .section-title { font-size: 1.04rem; font-weight: 850; color: #0f172a; margin: 8px 0; }
       @media (max-width: 900px) { .quick-grid { grid-template-columns: repeat(2, minmax(0,1fr)); } }
     </style>
-    """,
-    unsafe_allow_html=True,
-)
+    """)
 
 
 # =====================================================
@@ -291,7 +304,7 @@ def status_badge(status):
         STATUS_EM_ANDAMENTO: "status-warn",
         STATUS_NAO_INICIADA: "status-off",
     }.get(status, "status-off")
-    return f'<span class="{classe}">{STATUS_LABELS.get(status, status)}</span>'
+    return f'<span class="{classe}">{escape_html(STATUS_LABELS.get(status, status))}</span>'
 
 
 def status_card_class(status):
@@ -432,14 +445,17 @@ def executar(sql, params=()):
 
 
 def consultar(sql, params=()):
-    with abrir_conexao_raw() as conn:
+    conn = abrir_conexao_raw()
+    try:
         return pd.read_sql_query(adaptar_sql(sql), conn, params=params)
+    finally:
+        conn.close()
 
 
 def ultimo_id(conn):
     if DB_BACKEND == "postgresql":
-        return conn.execute("SELECT LASTVAL()").fetchone()[0]
-    return ultimo_id(conn)
+        return int(conn.execute("SELECT LASTVAL()").fetchone()[0])
+    return int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
 
 
 def coluna_existe(conn, tabela, coluna):
@@ -1373,15 +1389,12 @@ def preparar_tabela(df):
 
 
 def tela_login():
-    st.markdown(
-        f"""
+    render_html(f"""
         <div class="hero">
           <h1>{APP_NAME}</h1>
           <p>Acompanhamento de estudos, produtividade, tarefas educacionais e desempenho por aluno.</p>
         </div>
-        """,
-        unsafe_allow_html=True,
-    )
+        """)
     with st.expander("Usuário inicial"):
         st.write(f"Gestor: **{ADMIN_EMAIL}** / senha **{ADMIN_PASSWORD}**")
     with st.form("login"):
@@ -1399,15 +1412,12 @@ def tela_login():
 
 def tela_troca_obrigatoria():
     usuario = aluno_logado()
-    st.markdown(
-        f"""
+    render_html(f"""
         <div class="hero">
           <h1>{APP_NAME}</h1>
           <p>Por segurança, altere sua senha inicial antes de acessar o sistema.</p>
         </div>
-        """,
-        unsafe_allow_html=True,
-    )
+        """)
     with st.form("troca_obrigatoria"):
         nova = st.text_input("Nova senha", type="password")
         confirmar = st.text_input("Confirmar nova senha", type="password")
@@ -1431,15 +1441,12 @@ def tela_troca_obrigatoria():
 
 
 def dashboard():
-    st.markdown(
-        f"""
+    render_html(f"""
         <div class="hero">
           <h1>{APP_NAME}</h1>
           <p>Visão consolidada, análise individual, evolução e comparação entre alunos.</p>
         </div>
-        """,
-        unsafe_allow_html=True,
-    )
+        """)
     df = carregar_execucoes()
     if df.empty:
         st.info("Cadastre alunos, tarefas e registros para iniciar o acompanhamento.")
@@ -1751,25 +1758,22 @@ def exibir_card_ultima(atividade):
         st.info("Ainda não há atividade recente iniciada ou concluída.")
         return
     classe = status_card_class(atividade["status"])
-    st.markdown(
-        f"""
+    render_html(f"""
         <div class="quick-card {classe}">
           <div class="quick-label">Última atividade registrada</div>
-          <h3 style="margin:4px 0 0 0;">Tarefa {atividade['tarefa']} · {atividade['disciplina']}</h3>
+          <h3 style="margin:4px 0 0 0;">Tarefa {escape_html(atividade['tarefa'])} · {escape_html(atividade['disciplina'])}</h3>
           <div style="margin-top:8px;">{status_badge(atividade['status'])}</div>
           <div class="quick-grid">
-            <div class="quick-item"><div class="quick-label">Aluno</div><div class="quick-value">{atividade['aluno']}</div></div>
-            <div class="quick-item"><div class="quick-label">Assunto</div><div class="quick-value">{atividade['assunto'] or '-'}</div></div>
-            <div class="quick-item"><div class="quick-label">Tipo</div><div class="quick-value">{atividade['tipo']}</div></div>
+            <div class="quick-item"><div class="quick-label">Aluno</div><div class="quick-value">{escape_html(atividade['aluno'])}</div></div>
+            <div class="quick-item"><div class="quick-label">Assunto</div><div class="quick-value">{escape_html(atividade['assunto'] or '-')}</div></div>
+            <div class="quick-item"><div class="quick-label">Tipo</div><div class="quick-value">{escape_html(atividade['tipo'])}</div></div>
             <div class="quick-item"><div class="quick-label">Tempo</div><div class="quick-value">{float(atividade['ch_efetiva'] or 0):.2f}h</div></div>
-            <div class="quick-item"><div class="quick-label">Data</div><div class="quick-value">{formatar_data_br(atividade['data_execucao'])}</div></div>
-            <div class="quick-item"><div class="quick-label">Atualização</div><div class="quick-value">{atividade['atualizado_em']}</div></div>
-            <div class="quick-item" style="grid-column: span 2;"><div class="quick-label">Observações</div><div class="quick-value">{atividade['comentario'] or '-'}</div></div>
+            <div class="quick-item"><div class="quick-label">Data</div><div class="quick-value">{escape_html(formatar_data_br(atividade['data_execucao']))}</div></div>
+            <div class="quick-item"><div class="quick-label">Atualização</div><div class="quick-value">{escape_html(atividade['atualizado_em'])}</div></div>
+            <div class="quick-item" style="grid-column: span 2;"><div class="quick-label">Observações</div><div class="quick-value">{escape_html(atividade['comentario'] or '-')}</div></div>
           </div>
         </div>
-        """,
-        unsafe_allow_html=True,
-    )
+        """)
 
 
 def tela_registro_rapido():
@@ -1818,7 +1822,7 @@ def tela_registro_rapido():
         ),
     )
     tarefa = tarefas.loc[tarefas["tarefa_id"] == tarefa_id].iloc[0]
-    st.markdown('<div class="section-title">Conteúdo previsto</div>', unsafe_allow_html=True)
+    render_html('<div class="section-title">Conteúdo previsto</div>')
     st.dataframe(
         pd.DataFrame(
             [
