@@ -2257,160 +2257,325 @@ def _verificar_regra_andamento(tarefas_df: pd.DataFrame, tarefa_selecionada, nov
     return False, msg
 
 
-def _formulario_registro(tarefa, prefixo="rr", mostrar_confirmacao_concluida=False):
-    """Renderiza o formulário de registro e retorna os dados preenchidos."""
+def _card_tarefa(tarefa) -> str:
+    """Card visual com os dados atuais da tarefa selecionada (lidos do banco)."""
     status_atual = str(tarefa.get("status", STATUS_NAO_INICIADA))
+    badge        = status_badge(status_atual)
+    data_fmt     = formatar_data_br(tarefa.get("data_execucao")) or "—"
+    ch           = float(tarefa.get("ch_efetiva") or 0)
+    questoes     = int(tarefa.get("qtd_questoes_feitas") or 0)
+    acertos      = int(tarefa.get("qtd_acertos") or 0)
+    desempenho   = int(tarefa.get("desempenho") or 0)
+    comentario   = escape_html(tarefa.get("comentario") or "—")
+    card_cls     = status_card_class(status_atual)
 
-    if mostrar_confirmacao_concluida:
-        render_html("""
-            <div class="rule-warning">
-              ⚠️ <strong>Atenção:</strong> Esta tarefa já está <strong>Concluída</strong>.
-              Alterar seus dados pode modificar o histórico de estudos.
-              Confirme abaixo para prosseguir.
-            </div>
-        """)
-
-    with st.form(f"form_{prefixo}_{tarefa['tarefa_id']}"):
-        col1, col2, col3, col4 = st.columns(4)
-        novo_status = col1.selectbox(
-            "Status",
-            STATUS_VALIDOS,
-            index=STATUS_VALIDOS.index(status_atual),
-            format_func=lambda v: STATUS_LABELS[v],
-        )
-        tipo_idx = TIPOS_ESTUDO.index(tarefa["tipo"]) if tarefa["tipo"] in TIPOS_ESTUDO else TIPOS_ESTUDO.index("Outro")
-        tipo_estudo  = col2.selectbox("Tipo de estudo", TIPOS_ESTUDO, index=tipo_idx)
-        data_estudo  = col3.date_input("Data do estudo", value=date.today())
-        ch           = col4.number_input("Tempo gasto (h)", min_value=0.0, value=float(tarefa["ch_efetiva"] or 0), step=0.25)
-        questoes     = st.number_input("Questões feitas", min_value=0, value=int(tarefa["qtd_questoes_feitas"] or 0), step=1)
-        acertos      = st.number_input("Acertos", min_value=0, value=int(tarefa["qtd_acertos"] or 0), step=1)
-        comentario   = st.text_area("Observações", value=tarefa["comentario"] or "")
-
-        if mostrar_confirmacao_concluida:
-            confirmado = st.checkbox("✅ Confirmo que desejo alterar uma tarefa já concluída")
-        else:
-            confirmado = True
-
-        salvar = st.form_submit_button("Registrar atividade", use_container_width=True, type="primary")
-
-    return salvar, novo_status, tipo_estudo, data_estudo, ch, questoes, acertos, comentario, confirmado
+    return f"""
+    <div class="quick-card {card_cls}" style="margin-bottom:12px">
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+        <div>
+          <div class="quick-label">Dados registrados atualmente</div>
+          <div style="font-size:.97rem;font-weight:800;color:var(--c-text);margin:3px 0">
+            Tarefa {escape_html(str(tarefa.get('tarefa','')))} — {escape_html(str(tarefa.get('disciplina','')))}
+          </div>
+          <div class="muted" style="font-size:.78rem">
+            {escape_html(str(tarefa.get('aula') or ''))}
+            {(' › ' + escape_html(str(tarefa.get('assunto','')))) if tarefa.get('assunto') else ''}
+          </div>
+        </div>
+        <div>{badge}</div>
+      </div>
+      <div class="quick-grid" style="margin-top:10px">
+        <div class="quick-item"><div class="quick-label">Data</div><div class="quick-value">{data_fmt}</div></div>
+        <div class="quick-item"><div class="quick-label">Tempo</div><div class="quick-value">{ch:.2f}h</div></div>
+        <div class="quick-item"><div class="quick-label">Questões</div><div class="quick-value">{questoes}</div></div>
+        <div class="quick-item"><div class="quick-label">Acertos / Desempenho</div><div class="quick-value">{acertos} &nbsp;·&nbsp; {desempenho:.0f}%</div></div>
+        <div class="quick-item" style="grid-column:span 4"><div class="quick-label">Observações</div><div class="quick-value">{comentario}</div></div>
+      </div>
+    </div>
+    """
 
 
-def _renderizar_secao_registro(tarefas_df, aluno_id, status_alvo, titulo, key_prefix):
-    """Renderiza uma seção de registro para um grupo de tarefas (por status)."""
+def _renderizar_secao_registro(tarefas_df: pd.DataFrame, aluno_id: int, status_alvo: str, titulo: str, key_prefix: str):
+    """
+    Renderiza a seção de registro de uma aba (por status).
+
+    Fluxo:
+    1. Usuário seleciona a tarefa → formulário pré-carregado com os dados atuais do banco.
+    2. Usuário edita e clica em Salvar.
+    3. Sistema valida → grava → exibe mensagem clara de sucesso ou erro.
+    """
     grupo = tarefas_df[tarefas_df["status"] == status_alvo].copy()
     if grupo.empty:
-        st.info(f"Nenhuma tarefa {STATUS_LABELS[status_alvo].lower()}.")
+        render_html(f"""
+            <div style="text-align:center;padding:32px;color:var(--c-muted);font-size:.9rem">
+              ✅ Nenhuma tarefa <strong>{STATUS_LABELS[status_alvo].lower()}</strong> no momento.
+            </div>
+        """)
         return
 
+    # ── Seletor de tarefa ──
     opcoes = grupo["tarefa_id"].tolist()
     tarefa_id = st.selectbox(
-        f"Tarefa {STATUS_LABELS[status_alvo].lower()}",
+        f"Selecione a tarefa",
         opcoes,
         format_func=lambda v: _label_tarefa(grupo[grupo["tarefa_id"] == v].iloc[0]),
         key=f"{key_prefix}_sel",
     )
     tarefa = grupo[grupo["tarefa_id"] == tarefa_id].iloc[0]
 
-    # Exibe detalhes da tarefa selecionada
-    st.dataframe(
-        pd.DataFrame([{
-            "Disciplina": tarefa["disciplina"],
-            "Aula": tarefa["aula"],
-            "Assunto": tarefa["assunto"],
-            "Tipo": tarefa["tipo"],
-            "Conteúdo": tarefa["conteudo"],
-            "Exercícios previstos": tarefa["qtd_exercicios_previstos"],
-        }]),
-        use_container_width=True,
-        hide_index=True,
-    )
+    # ── Card com dados atuais (carregados automaticamente ao selecionar) ──
+    render_html(_card_tarefa(tarefa))
 
+    # ── Aviso para tarefas concluídas ──
     eh_concluida = (status_alvo == STATUS_CONCLUIDA)
+    if eh_concluida:
+        render_html("""
+            <div class="rule-warning">
+              ⚠️ <strong>Atenção:</strong> Esta tarefa já está <strong>Concluída</strong>.
+              Qualquer alteração modifica dados históricos. Confirme no formulário abaixo antes de salvar.
+            </div>
+        """)
 
-    salvar, novo_status, tipo_estudo, data_estudo, ch, questoes, acertos, comentario, confirmado = (
-        _formulario_registro(tarefa, prefixo=key_prefix, mostrar_confirmacao_concluida=eh_concluida)
-    )
+    # ── Formulário pré-preenchido com os valores atuais do registro ──
+    status_atual = str(tarefa.get("status", STATUS_NAO_INICIADA))
+    tipo_idx     = TIPOS_ESTUDO.index(tarefa["tipo"]) if tarefa["tipo"] in TIPOS_ESTUDO else TIPOS_ESTUDO.index("Outro")
+
+    # Recuperar data_execucao do registro; se nula, usa hoje
+    data_atual = None
+    if tarefa.get("data_execucao"):
+        try:
+            data_atual = pd.to_datetime(tarefa["data_execucao"]).date()
+        except Exception:
+            data_atual = None
+    if data_atual is None:
+        data_atual = date.today()
+
+    with st.form(f"form_{key_prefix}_{tarefa_id}", border=True):
+        st.markdown("##### ✏️ Editar registro")
+
+        col1, col2, col3, col4 = st.columns(4)
+        novo_status = col1.selectbox(
+            "Novo status",
+            STATUS_VALIDOS,
+            index=STATUS_VALIDOS.index(status_atual),
+            format_func=lambda v: STATUS_LABELS[v],
+            help="Altere o status da tarefa conforme o progresso atual.",
+        )
+        tipo_estudo = col2.selectbox(
+            "Tipo de estudo",
+            TIPOS_ESTUDO,
+            index=tipo_idx,
+            help="Método utilizado nesta sessão de estudo.",
+        )
+        data_estudo = col3.date_input(
+            "Data do estudo",
+            value=data_atual,
+            help="Data em que o estudo foi realizado.",
+        )
+        ch = col4.number_input(
+            "Tempo gasto (h)",
+            min_value=0.0,
+            value=float(tarefa.get("ch_efetiva") or 0),
+            step=0.25,
+            format="%.2f",
+            help="Carga horária efetiva dedicada a esta tarefa.",
+        )
+
+        col5, col6 = st.columns(2)
+        questoes = col5.number_input(
+            "Questões feitas",
+            min_value=0,
+            value=int(tarefa.get("qtd_questoes_feitas") or 0),
+            step=1,
+            help="Total de questões resolvidas nesta tarefa.",
+        )
+        acertos = col6.number_input(
+            "Acertos",
+            min_value=0,
+            value=int(tarefa.get("qtd_acertos") or 0),
+            step=1,
+            help="Quantidade de questões respondidas corretamente.",
+        )
+
+        comentario = st.text_area(
+            "Observações",
+            value=str(tarefa.get("comentario") or ""),
+            placeholder="Anotações sobre esta sessão de estudo (opcional)…",
+            help="Registre dificuldades, conteúdos vistos ou lembretes para revisão.",
+        )
+
+        if eh_concluida:
+            confirmado = st.checkbox(
+                "✅ Confirmo que desejo alterar este registro já concluído (dados históricos serão modificados)",
+                value=False,
+            )
+        else:
+            confirmado = True
+
+        col_btn1, col_btn2 = st.columns([3, 1])
+        salvar  = col_btn1.form_submit_button("💾 Salvar alteração", use_container_width=True, type="primary")
+        cancelar = col_btn2.form_submit_button("✖ Cancelar", use_container_width=True)
+
+    if cancelar:
+        st.info("Alteração cancelada.")
+        return
 
     if not salvar:
         return
 
-    # Validação: acertos x questões
+    # ── Validações com feedback claro ──
+    erros = []
+
     if acertos > questoes:
-        st.error("Acertos não podem ser maiores que questões feitas.")
-        return
+        erros.append("O número de acertos não pode ser maior que o número de questões feitas.")
 
-    # Validação: tarefa concluída exige confirmação
     if eh_concluida and not confirmado:
-        render_html('<div class="rule-error">Marque a confirmação para alterar uma tarefa já concluída.</div>')
-        return
+        erros.append("Para alterar uma tarefa já concluída, marque a confirmação no formulário.")
 
-    # Validação: regra de andamento por disciplina
-    pode, msg_erro = _verificar_regra_andamento(tarefas_df, tarefa, novo_status, int(tarefa["disciplina_id"]))
+    pode, msg_bloqueio = _verificar_regra_andamento(tarefas_df, tarefa, novo_status, int(tarefa["disciplina_id"]))
     if not pode:
-        render_html(f'<div class="rule-error">{escape_html(msg_erro)}</div>')
+        erros.append(msg_bloqueio)
+
+    if erros:
+        for e in erros:
+            render_html(f'<div class="rule-error">❌ {escape_html(e)}</div>')
         return
 
-    with conectar() as conn:
-        upsert_execucao(conn, aluno_id, int(tarefa_id), str(data_estudo), ch, None, 0, acertos, comentario, questoes, novo_status, tipo_estudo)
-    limpar_cache()
-    st.success("Atividade registrada com sucesso.")
-    st.rerun()
+    # ── Gravação ──
+    try:
+        with conectar() as conn:
+            upsert_execucao(
+                conn, aluno_id, int(tarefa_id), str(data_estudo),
+                ch, None, 0, acertos, limpar_texto(comentario),
+                questoes, novo_status, tipo_estudo,
+            )
+        limpar_cache()
+
+        # Mensagem de sucesso detalhada
+        status_anterior = STATUS_LABELS.get(status_atual, status_atual)
+        status_novo     = STATUS_LABELS.get(novo_status, novo_status)
+        mudou_status    = status_atual != novo_status
+        msg_status      = f" · Status: **{status_anterior} → {status_novo}**" if mudou_status else ""
+        st.success(
+            f"✅ Registro salvo com sucesso! "
+            f"Tarefa **{int(tarefa['tarefa'])}** ({tarefa['disciplina']}){msg_status} · "
+            f"{ch:.2f}h registradas · {acertos}/{questoes} acertos."
+        )
+        st.rerun()
+
+    except Exception as exc:
+        erro_usuario("❌ Não foi possível salvar o registro. Verifique os dados e tente novamente.", exc)
 
 
 def tela_registro_rapido():
-    render_html('<div class="hero"><h1>Registro Rápido</h1><p>Registre o progresso de uma tarefa de forma ágil.</p></div>')
+    render_html(
+        '<div class="hero">'
+        '<h1>⚡ Registro Rápido</h1>'
+        '<p>Selecione uma tarefa para carregar seus dados atuais e registrar o progresso. '
+        'O formulário é pré-preenchido automaticamente com o último registro salvo.</p>'
+        '</div>'
+    )
 
     usuario = aluno_logado()
     alunos  = alunos_ativos()
 
+    # ── Seleção do aluno ──
     if usuario["perfil"] == "Aluno":
         aluno_id = int(usuario["id"])
-        st.text_input("Aluno", value=usuario["nome"], disabled=True)
+        render_html(
+            f'<div class="quick-item" style="margin-bottom:12px">'
+            f'<div class="quick-label">Aluno</div>'
+            f'<div class="quick-value">👤 {escape_html(usuario["nome"])}</div>'
+            f'</div>'
+        )
     else:
         if alunos.empty:
-            st.info("Cadastre um aluno para registrar atividades.")
+            st.info("Nenhum aluno cadastrado. Vá em **Alunos** para cadastrar.")
             return
         aluno_id = st.selectbox(
             "Aluno",
             alunos["id"].tolist(),
             format_func=lambda v: alunos.loc[alunos["id"] == v, "nome"].iloc[0],
+            help="Selecione o aluno para visualizar e registrar atividades.",
         )
 
+    # ── Card da última atividade ──
     exibir_card_ultima(ultima_atividade(aluno_id))
 
+    # ── Carrega tarefas ──
     tarefas = carregar_visao_tarefas(aluno_id)
     if tarefas.empty:
-        st.info("Cadastre tarefas para registrar estudos.")
+        st.info("Nenhuma tarefa vinculada a este aluno. Vá em **Tarefas** para vincular.")
         return
 
-    # Separação em três abas por status
+    # ── Contadores por status ──
+    qtd_nao  = len(tarefas[tarefas["status"] == STATUS_NAO_INICIADA])
+    qtd_and  = len(tarefas[tarefas["status"] == STATUS_EM_ANDAMENTO])
+    qtd_conc = len(tarefas[tarefas["status"] == STATUS_CONCLUIDA])
+
+    # ── Abas por status ──
     aba_nao, aba_and, aba_conc = st.tabs([
-        f"🔘 Não iniciadas ({len(tarefas[tarefas['status'] == STATUS_NAO_INICIADA])})",
-        f"🟡 Em andamento ({len(tarefas[tarefas['status'] == STATUS_EM_ANDAMENTO])})",
-        f"🟢 Concluídas ({len(tarefas[tarefas['status'] == STATUS_CONCLUIDA])})",
+        f"🔘 Não iniciadas  ({qtd_nao})",
+        f"🟡 Em andamento  ({qtd_and})",
+        f"🟢 Concluídas  ({qtd_conc})",
     ])
 
     with aba_nao:
-        st.caption("Uma tarefa não iniciada só pode ser iniciada se não houver outra tarefa em andamento para a mesma disciplina.")
+        render_html(
+            '<div class="insight-card info" style="margin-bottom:12px">'
+            '<div class="insight-icon">ℹ️</div>'
+            '<div class="insight-body">'
+            '<div class="insight-title">Regra: tarefas não iniciadas</div>'
+            '<p class="insight-text">Uma tarefa não iniciada só pode ser iniciada se <strong>não houver outra tarefa '
+            'em andamento na mesma disciplina</strong>. Conclua ou atualize a tarefa em andamento primeiro.</p>'
+            '</div></div>'
+        )
         _renderizar_secao_registro(tarefas, aluno_id, STATUS_NAO_INICIADA, "Não iniciadas", "rr_nao")
 
     with aba_and:
+        render_html(
+            '<div class="insight-card success" style="margin-bottom:12px">'
+            '<div class="insight-icon">🟡</div>'
+            '<div class="insight-body">'
+            '<div class="insight-title">Tarefas em andamento</div>'
+            '<p class="insight-text">Selecione uma tarefa para ver os dados já registrados e atualizar o progresso. '
+            'O formulário carrega automaticamente os valores do último registro.</p>'
+            '</div></div>'
+        )
         _renderizar_secao_registro(tarefas, aluno_id, STATUS_EM_ANDAMENTO, "Em andamento", "rr_and")
 
     with aba_conc:
-        st.caption("⚠️ Alterações em tarefas concluídas exigem confirmação e podem modificar dados históricos.")
+        render_html(
+            '<div class="insight-card warning" style="margin-bottom:12px">'
+            '<div class="insight-icon">⚠️</div>'
+            '<div class="insight-body">'
+            '<div class="insight-title">Atenção: tarefas concluídas</div>'
+            '<p class="insight-text">Alterações em tarefas concluídas modificam o histórico de estudos. '
+            'O sistema exigirá confirmação explícita antes de salvar.</p>'
+            '</div></div>'
+        )
         _renderizar_secao_registro(tarefas, aluno_id, STATUS_CONCLUIDA, "Concluídas", "rr_conc")
 
-    # Histórico recente
+    # ── Histórico recente ──
     recentes = carregar_execucoes()
     recentes = recentes[recentes["aluno_id"] == aluno_id].head(10)
     if not recentes.empty:
         st.markdown("---")
-        st.subheader("Histórico recente")
-        colunas = ["tarefa", "disciplina", "assunto", "tipo", "status_label", "data_execucao", "ch_efetiva", "comentario"]
-        tabela = preparar_tabela(recentes)
-        st.dataframe(tabela[[c for c in colunas if c in tabela.columns]], use_container_width=True, hide_index=True, row_height=72)
+        render_html('<div class="section-title">📋 Histórico recente</div>')
+        colunas  = ["tarefa","disciplina","assunto","tipo","status_label","data_execucao","ch_efetiva","qtd_questoes_feitas","qtd_acertos","desempenho","comentario"]
+        tabela   = preparar_tabela(recentes)
+        colunas_disp = [c for c in colunas if c in tabela.columns]
+        st.dataframe(
+            tabela[colunas_disp].rename(columns={
+                "tarefa":"Tarefa","disciplina":"Disciplina","assunto":"Assunto",
+                "tipo":"Tipo","status_label":"Status","data_execucao":"Data",
+                "ch_efetiva":"Horas","qtd_questoes_feitas":"Questões",
+                "qtd_acertos":"Acertos","desempenho":"Desempenho (%)","comentario":"Observações",
+            }),
+            use_container_width=True,
+            hide_index=True,
+            row_height=64,
+        )
 
 
 # ─────────────────────────────────────────────
