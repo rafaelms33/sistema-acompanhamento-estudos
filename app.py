@@ -1,3 +1,8 @@
+"""
+Sistema de Acompanhamento de Estudos
+Arquivo único — refatorado para legibilidade, layout e regras de negócio do Registro Rápido.
+"""
+
 import hashlib
 import hmac
 import html as html_lib
@@ -20,6 +25,10 @@ except ImportError:
     psycopg = None
     UniqueViolation = IntegrityError
 
+
+# ─────────────────────────────────────────────
+# CONFIGURAÇÃO
+# ─────────────────────────────────────────────
 
 def config_valor(chave, padrao=None):
     valor = os.getenv(chave)
@@ -66,18 +75,9 @@ STATUS_CORES = {
     STATUS_CONCLUIDA: "#22c55e",
 }
 TIPOS_ESTUDO = [
-    "Leitura",
-    "Exercícios",
-    "Revisão",
-    "Simulado",
-    "Videoaula",
-    "Resumo",
-    "Flashcards",
-    "Projeto",
-    "Pesquisa",
-    "Outro",
+    "Leitura", "Exercícios", "Revisão", "Simulado",
+    "Videoaula", "Resumo", "Flashcards", "Projeto", "Pesquisa", "Outro",
 ]
-
 
 st.set_page_config(
     page_title=APP_NAME,
@@ -86,8 +86,164 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+
+# ─────────────────────────────────────────────
+# CSS GLOBAL
+# ─────────────────────────────────────────────
+
+CSS = """
+<style>
+  :root { color-scheme: light; }
+
+  /* Layout */
+  .block-container {
+    padding: 1.25rem 2rem 2rem;
+    max-width: 1480px;
+  }
+
+  /* Sidebar */
+  [data-testid="stSidebar"] {
+    background: #0f172a;
+  }
+  [data-testid="stSidebar"] * { color: #f8fafc !important; }
+  [data-testid="stSidebar"] .stRadio label { padding: 6px 0; }
+
+  /* Métricas */
+  [data-testid="stMetric"] {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    padding: 14px 18px;
+    box-shadow: 0 1px 3px rgba(15,23,42,.05);
+  }
+  [data-testid="stMetricValue"] { font-size: 1.45rem; font-weight: 800; color: #0f172a; }
+  [data-testid="stMetricLabel"] { color: #475569; font-size: .85rem; }
+
+  /* DataFrames */
+  div[data-testid="stDataFrame"] {
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    overflow: hidden;
+  }
+
+  /* Hero banner */
+  .hero {
+    border: 1px solid #dbeafe;
+    background: linear-gradient(135deg, #eff6ff 0%, #f8fafc 50%, #ecfdf5 100%);
+    border-radius: 10px;
+    padding: 20px 24px;
+    margin-bottom: 16px;
+  }
+  .hero h1 { margin: 0 0 4px; font-size: 1.6rem; color: #0f172a; font-weight: 800; }
+  .hero p  { margin: 0; color: #475569; font-size: .95rem; }
+
+  /* Cards de atividade */
+  .quick-card {
+    border: 1px solid #cbd5e1;
+    border-left: 6px solid #94a3b8;
+    border-radius: 10px;
+    padding: 16px 20px;
+    background: #ffffff;
+    box-shadow: 0 4px 12px rgba(15,23,42,.06);
+    margin-bottom: 16px;
+  }
+  .quick-card.ok   { border-left-color: #22c55e; }
+  .quick-card.warn { border-left-color: #f59e0b; }
+  .quick-card.off  { border-left-color: #94a3b8; }
+  .quick-card h3   { margin: 4px 0 0; font-size: 1.05rem; color: #0f172a; }
+
+  /* Grid interna do card */
+  .quick-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 10px;
+    margin-top: 14px;
+  }
+  @media (max-width: 900px) { .quick-grid { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 560px) { .quick-grid { grid-template-columns: 1fr; } }
+
+  .quick-item {
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 10px 12px;
+  }
+  .quick-label {
+    color: #64748b;
+    font-size: .72rem;
+    text-transform: uppercase;
+    font-weight: 800;
+    letter-spacing: .04em;
+  }
+  .quick-value {
+    color: #0f172a;
+    font-weight: 700;
+    margin-top: 3px;
+    overflow-wrap: anywhere;
+    font-size: .93rem;
+  }
+
+  /* Badges de status */
+  .status-ok, .status-warn, .status-off {
+    display: inline-flex;
+    align-items: center;
+    padding: 4px 12px;
+    border-radius: 999px;
+    font-weight: 800;
+    font-size: .82rem;
+    margin-top: 6px;
+  }
+  .status-ok   { background: #dcfce7; color: #166534; }
+  .status-warn { background: #fef3c7; color: #92400e; }
+  .status-off  { background: #f1f5f9; color: #475569; }
+
+  /* Utilitários */
+  .muted         { color: #64748b; font-size: .88rem; }
+  .section-title { font-size: 1rem; font-weight: 800; color: #0f172a; margin: 10px 0 6px; }
+
+  /* Bloco de aviso de regra de negócio */
+  .rule-warning {
+    background: #fffbeb;
+    border: 1px solid #fde68a;
+    border-left: 5px solid #f59e0b;
+    border-radius: 8px;
+    padding: 14px 16px;
+    margin: 12px 0;
+    color: #78350f;
+    font-size: .93rem;
+  }
+  .rule-error {
+    background: #fef2f2;
+    border: 1px solid #fecaca;
+    border-left: 5px solid #ef4444;
+    border-radius: 8px;
+    padding: 14px 16px;
+    margin: 12px 0;
+    color: #7f1d1d;
+    font-size: .93rem;
+  }
+
+  /* Formulários */
+  .stForm { border: 1px solid #e2e8f0 !important; border-radius: 10px !important; padding: 16px !important; }
+
+  /* Botões primários */
+  .stButton > button[kind="primary"] {
+    background: #0f172a;
+    color: white;
+    border-radius: 8px;
+    font-weight: 700;
+  }
+</style>
+"""
+
+st.markdown(CSS, unsafe_allow_html=True)
+
+
+# ─────────────────────────────────────────────
+# UTILITÁRIOS DE RENDERIZAÇÃO
+# ─────────────────────────────────────────────
+
 def render_html(conteudo: str):
-    """Renderiza HTML/CSS no Streamlit sem exibir o código como texto."""
     if hasattr(st, "html"):
         st.html(conteudo)
     else:
@@ -95,73 +251,27 @@ def render_html(conteudo: str):
 
 
 def escape_html(valor):
-    """Evita que textos vindos do banco quebrem o HTML dos cards."""
     if valor is None or (isinstance(valor, float) and pd.isna(valor)):
         return ""
     return html_lib.escape(str(valor))
 
 
-render_html("""
-    <style>
-      :root { color-scheme: light; }
-      .block-container { padding-top: 1.25rem; padding-bottom: 2rem; max-width: 1480px; }
-      [data-testid="stMetric"] {
-        background: #ffffff;
-        border: 1px solid #e2e8f0;
-        border-radius: 8px;
-        padding: 14px 16px;
-        box-shadow: 0 1px 2px rgba(15, 23, 42, .04);
-      }
-      [data-testid="stMetricValue"] { font-size: 1.45rem; font-weight: 800; }
-      [data-testid="stMetricLabel"] { color: #475569; }
-      div[data-testid="stDataFrame"] { border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden; }
-      .hero {
-        border: 1px solid #dbeafe;
-        background: linear-gradient(135deg, #eff6ff 0%, #f8fafc 46%, #ecfdf5 100%);
-        border-radius: 8px;
-        padding: 18px 20px;
-        margin-bottom: 12px;
-      }
-      .hero h1 { margin: 0 0 4px 0; font-size: 1.65rem; color: #0f172a; }
-      .hero p { margin: 0; color: #475569; }
-      .quick-card {
-        border: 1px solid #cbd5e1;
-        border-left: 7px solid #94a3b8;
-        border-radius: 8px;
-        padding: 16px 18px;
-        background: #ffffff;
-        box-shadow: 0 6px 18px rgba(15, 23, 42, .06);
-        margin-bottom: 14px;
-      }
-      .quick-card.ok { border-left-color: #22c55e; }
-      .quick-card.warn { border-left-color: #f59e0b; }
-      .quick-card.off { border-left-color: #94a3b8; }
-      .quick-grid { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 10px; margin-top: 12px; }
-      .quick-item { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px; }
-      .quick-label { color: #64748b; font-size: .78rem; text-transform: uppercase; font-weight: 800; letter-spacing: .02em; }
-      .quick-value { color: #0f172a; font-weight: 700; margin-top: 2px; overflow-wrap: anywhere; }
-      .status-ok, .status-warn, .status-off {
-        display: inline-flex;
-        align-items: center;
-        padding: 4px 10px;
-        border-radius: 999px;
-        font-weight: 800;
-        font-size: .84rem;
-      }
-      .status-ok { background:#dcfce7; color:#166534; }
-      .status-warn { background:#fef3c7; color:#92400e; }
-      .status-off { background:#f1f5f9; color:#475569; }
-      .muted { color: #64748b; }
-      .section-title { font-size: 1.04rem; font-weight: 850; color: #0f172a; margin: 8px 0; }
-      @media (max-width: 900px) { .quick-grid { grid-template-columns: repeat(2, minmax(0,1fr)); } }
-    </style>
-    """)
+def status_badge(status: str) -> str:
+    classe = {
+        STATUS_CONCLUIDA:   "status-ok",
+        STATUS_EM_ANDAMENTO:"status-warn",
+        STATUS_NAO_INICIADA:"status-off",
+    }.get(status, "status-off")
+    return f'<span class="{classe}">{escape_html(STATUS_LABELS.get(status, status))}</span>'
 
 
-# =====================================================
-# UTILITÁRIOS
-# =====================================================
+def status_card_class(status: str) -> str:
+    return {STATUS_CONCLUIDA: "ok", STATUS_EM_ANDAMENTO: "warn", STATUS_NAO_INICIADA: "off"}.get(status, "off")
 
+
+# ─────────────────────────────────────────────
+# UTILITÁRIOS GERAIS
+# ─────────────────────────────────────────────
 
 def limpar_texto(valor):
     if pd.isna(valor):
@@ -225,10 +335,10 @@ def converter_horas(valor):
         if ":" in valor:
             partes = valor.split(":")
             try:
-                horas = int(partes[0])
-                minutos = int(partes[1]) if len(partes) > 1 else 0
-                segundos = int(partes[2]) if len(partes) > 2 else 0
-                return horas + minutos / 60 + segundos / 3600
+                h = int(partes[0])
+                m = int(partes[1]) if len(partes) > 1 else 0
+                s = int(partes[2]) if len(partes) > 2 else 0
+                return h + m / 60 + s / 3600
             except ValueError:
                 return 0.0
         try:
@@ -269,6 +379,13 @@ def converter_data(valor):
         return None
 
 
+def formatar_data_br(valor):
+    data = converter_data(valor)
+    if not data:
+        return ""
+    return pd.to_datetime(data).strftime("%d/%m/%Y")
+
+
 def nome_aluno_data_arquivo(caminho):
     caminho = Path(caminho)
     nome = caminho.stem.split("-", 1)[0].strip()
@@ -298,23 +415,6 @@ def distribuir_inteiro(total, pesos):
     return base
 
 
-def status_badge(status):
-    classe = {
-        STATUS_CONCLUIDA: "status-ok",
-        STATUS_EM_ANDAMENTO: "status-warn",
-        STATUS_NAO_INICIADA: "status-off",
-    }.get(status, "status-off")
-    return f'<span class="{classe}">{escape_html(STATUS_LABELS.get(status, status))}</span>'
-
-
-def status_card_class(status):
-    return {
-        STATUS_CONCLUIDA: "ok",
-        STATUS_EM_ANDAMENTO: "warn",
-        STATUS_NAO_INICIADA: "off",
-    }.get(status, "off")
-
-
 def normalizar_tipo_estudo(valor):
     tipo = limpar_texto(valor) or "Outro"
     aliases = {
@@ -329,6 +429,17 @@ def normalizar_tipo_estudo(valor):
     tipo = aliases.get(chave_texto(tipo), tipo)
     return tipo if tipo in TIPOS_ESTUDO else "Outro"
 
+
+def erro_usuario(mensagem, exc=None):
+    if DEBUG and exc is not None:
+        st.error(f"{mensagem}: {exc}")
+    else:
+        st.error(mensagem)
+
+
+# ─────────────────────────────────────────────
+# SEGURANÇA — SENHAS
+# ─────────────────────────────────────────────
 
 def hash_senha(senha):
     salt = os.urandom(16)
@@ -350,7 +461,11 @@ def verificar_senha(senha, senha_armazenada):
 
 
 def senha_valida(nova):
-    return len(str(nova or "")) >= 8 and bool(re.search(r"[A-Za-z]", str(nova))) and bool(re.search(r"\d", str(nova)))
+    return (
+        len(str(nova or "")) >= 8
+        and bool(re.search(r"[A-Za-z]", str(nova)))
+        and bool(re.search(r"\d", str(nova)))
+    )
 
 
 def atualizar_senha_usuario(usuario_id, nova_senha, forcar_troca=0):
@@ -360,24 +475,9 @@ def atualizar_senha_usuario(usuario_id, nova_senha, forcar_troca=0):
     )
 
 
-def formatar_data_br(valor):
-    data = converter_data(valor)
-    if not data:
-        return ""
-    return pd.to_datetime(data).strftime("%d/%m/%Y")
-
-
-def erro_usuario(mensagem, exc=None):
-    if DEBUG and exc is not None:
-        st.error(f"{mensagem}: {exc}")
-    else:
-        st.error(mensagem)
-
-
-# =====================================================
-# BANCO
-# =====================================================
-
+# ─────────────────────────────────────────────
+# BANCO DE DADOS
+# ─────────────────────────────────────────────
 
 def adaptar_sql(sql):
     if DB_BACKEND != "postgresql":
@@ -386,6 +486,7 @@ def adaptar_sql(sql):
 
 
 class ConexaoDB:
+    """Wrapper para compatibilidade entre SQLite e PostgreSQL."""
     def __init__(self, conn):
         self.conn = conn
         self._cursor = None
@@ -458,144 +559,115 @@ def ultimo_id(conn):
     return int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
 
 
-def coluna_existe(conn, tabela, coluna):
-    if DB_BACKEND == "postgresql":
-        row = conn.execute(
-            """
-            SELECT 1
-            FROM information_schema.columns
-            WHERE table_name = ? AND column_name = ?
-            """,
-            (tabela, coluna),
-        ).fetchone()
-        return row is not None
-    return coluna in {row[1] for row in conn.execute(f"PRAGMA table_info({tabela})").fetchall()}
-
-
 def erro_integridade(exc):
     return isinstance(exc, (IntegrityError, UniqueViolation))
 
 
+# ─────────────────────────────────────────────
+# CRIAÇÃO DAS TABELAS
+# ─────────────────────────────────────────────
+
 def criar_tabelas():
     if DB_BACKEND == "postgresql":
-        with conectar() as conn:
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS alunos (
-                    id SERIAL PRIMARY KEY,
-                    nome TEXT NOT NULL UNIQUE,
-                    email TEXT UNIQUE,
-                    senha TEXT NOT NULL,
-                    perfil TEXT NOT NULL DEFAULT 'Aluno' CHECK(perfil IN ('Gestor','Aluno')),
-                    ativo INTEGER DEFAULT 1,
-                    force_troca_senha INTEGER DEFAULT 1
-                )
-                """
-            )
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS disciplinas (
-                    id SERIAL PRIMARY KEY,
-                    nome TEXT NOT NULL UNIQUE,
-                    ativo INTEGER DEFAULT 1
-                )
-                """
-            )
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS aulas (
-                    id SERIAL PRIMARY KEY,
-                    disciplina_id INTEGER NOT NULL REFERENCES disciplinas(id),
-                    aula TEXT NOT NULL,
-                    assunto TEXT,
-                    estudada_padrao TEXT DEFAULT 'Não',
-                    revisao_24h_padrao TEXT DEFAULT 'Não',
-                    tipo_estudo TEXT DEFAULT 'Outro',
-                    ativo INTEGER DEFAULT 1
-                )
-                """
-            )
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS assuntos (
-                    id SERIAL PRIMARY KEY,
-                    aula_id INTEGER NOT NULL REFERENCES aulas(id),
-                    titulo TEXT NOT NULL,
-                    ativo INTEGER DEFAULT 1,
-                    UNIQUE(aula_id, titulo)
-                )
-                """
-            )
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS tarefas (
-                    id SERIAL PRIMARY KEY,
-                    numero INTEGER NOT NULL UNIQUE,
-                    trilha INTEGER,
-                    disciplina_id INTEGER NOT NULL REFERENCES disciplinas(id),
-                    seq_disciplina INTEGER,
-                    aula TEXT,
-                    qtd_exercicios_previstos INTEGER DEFAULT 0,
-                    tipo TEXT,
-                    conteudo TEXT,
-                    ativo INTEGER DEFAULT 1,
-                    aula_id INTEGER REFERENCES aulas(id),
-                    assunto_id INTEGER REFERENCES assuntos(id)
-                )
-                """
-            )
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS execucoes (
-                    id SERIAL PRIMARY KEY,
-                    aluno_id INTEGER NOT NULL REFERENCES alunos(id),
-                    tarefa_id INTEGER NOT NULL REFERENCES tarefas(id),
-                    data_execucao TEXT,
-                    ch_efetiva REAL DEFAULT 0,
-                    data_revisao_24h TEXT,
-                    ch_revisao REAL DEFAULT 0,
-                    qtd_acertos INTEGER DEFAULT 0,
-                    desempenho REAL DEFAULT 0,
-                    comentario TEXT,
-                    concluida INTEGER DEFAULT 0,
-                    atualizado_em TEXT DEFAULT CURRENT_TIMESTAMP,
-                    qtd_questoes_feitas INTEGER DEFAULT 0,
-                    status TEXT DEFAULT 'NAO_INICIADA',
-                    tipo_estudo TEXT DEFAULT 'Outro',
-                    UNIQUE(aluno_id, tarefa_id)
-                )
-                """
-            )
-            conn.execute("ALTER TABLE alunos ADD COLUMN IF NOT EXISTS force_troca_senha INTEGER DEFAULT 1")
-            conn.execute("ALTER TABLE execucoes ADD COLUMN IF NOT EXISTS qtd_questoes_feitas INTEGER DEFAULT 0")
-            conn.execute("ALTER TABLE execucoes ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'NAO_INICIADA'")
-            conn.execute("ALTER TABLE execucoes ADD COLUMN IF NOT EXISTS tipo_estudo TEXT DEFAULT 'Outro'")
-            conn.execute("ALTER TABLE aulas ADD COLUMN IF NOT EXISTS tipo_estudo TEXT DEFAULT 'Outro'")
-            conn.execute("ALTER TABLE tarefas ADD COLUMN IF NOT EXISTS aula_id INTEGER")
-            conn.execute("ALTER TABLE tarefas ADD COLUMN IF NOT EXISTS assunto_id INTEGER")
-            conn.execute(
-                """
-                UPDATE execucoes
-                SET status = CASE
-                    WHEN status IN ('NAO_INICIADA','EM_ANDAMENTO','CONCLUIDA') THEN status
-                    WHEN concluida = 1 THEN 'CONCLUIDA'
-                    ELSE 'NAO_INICIADA'
-                END
-                """
-            )
-            conn.execute("UPDATE execucoes SET concluida = CASE WHEN status = 'CONCLUIDA' THEN 1 ELSE 0 END")
-            conn.execute("DELETE FROM alunos WHERE email = 'aluno@local.com' OR nome = 'Aluno Padrão'")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_tarefas_disciplina ON tarefas(disciplina_id)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_tarefas_trilha ON tarefas(trilha)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_exec_aluno ON execucoes(aluno_id)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_exec_tarefa ON execucoes(tarefa_id)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_exec_status ON execucoes(status)")
+        _criar_tabelas_postgresql()
         return
+    _criar_tabelas_sqlite()
 
+
+def _criar_tabelas_postgresql():
+    with conectar() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS alunos (
+                id SERIAL PRIMARY KEY,
+                nome TEXT NOT NULL UNIQUE,
+                email TEXT UNIQUE,
+                senha TEXT NOT NULL,
+                perfil TEXT NOT NULL DEFAULT 'Aluno' CHECK(perfil IN ('Gestor','Aluno')),
+                ativo INTEGER DEFAULT 1,
+                force_troca_senha INTEGER DEFAULT 1
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS disciplinas (
+                id SERIAL PRIMARY KEY,
+                nome TEXT NOT NULL UNIQUE,
+                ativo INTEGER DEFAULT 1
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS aulas (
+                id SERIAL PRIMARY KEY,
+                disciplina_id INTEGER NOT NULL REFERENCES disciplinas(id),
+                aula TEXT NOT NULL,
+                assunto TEXT,
+                estudada_padrao TEXT DEFAULT 'Não',
+                revisao_24h_padrao TEXT DEFAULT 'Não',
+                tipo_estudo TEXT DEFAULT 'Outro',
+                ativo INTEGER DEFAULT 1
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS assuntos (
+                id SERIAL PRIMARY KEY,
+                aula_id INTEGER NOT NULL REFERENCES aulas(id),
+                titulo TEXT NOT NULL,
+                ativo INTEGER DEFAULT 1,
+                UNIQUE(aula_id, titulo)
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS tarefas (
+                id SERIAL PRIMARY KEY,
+                numero INTEGER NOT NULL UNIQUE,
+                trilha INTEGER,
+                disciplina_id INTEGER NOT NULL REFERENCES disciplinas(id),
+                seq_disciplina INTEGER,
+                aula TEXT,
+                qtd_exercicios_previstos INTEGER DEFAULT 0,
+                tipo TEXT,
+                conteudo TEXT,
+                ativo INTEGER DEFAULT 1,
+                aula_id INTEGER REFERENCES aulas(id),
+                assunto_id INTEGER REFERENCES assuntos(id)
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS execucoes (
+                id SERIAL PRIMARY KEY,
+                aluno_id INTEGER NOT NULL REFERENCES alunos(id),
+                tarefa_id INTEGER NOT NULL REFERENCES tarefas(id),
+                data_execucao TEXT,
+                ch_efetiva REAL DEFAULT 0,
+                data_revisao_24h TEXT,
+                ch_revisao REAL DEFAULT 0,
+                qtd_acertos INTEGER DEFAULT 0,
+                desempenho REAL DEFAULT 0,
+                comentario TEXT,
+                concluida INTEGER DEFAULT 0,
+                atualizado_em TEXT DEFAULT CURRENT_TIMESTAMP,
+                qtd_questoes_feitas INTEGER DEFAULT 0,
+                status TEXT DEFAULT 'NAO_INICIADA',
+                tipo_estudo TEXT DEFAULT 'Outro',
+                UNIQUE(aluno_id, tarefa_id)
+            )
+        """)
+        # Migrações seguras
+        conn.execute("ALTER TABLE alunos ADD COLUMN IF NOT EXISTS force_troca_senha INTEGER DEFAULT 1")
+        conn.execute("ALTER TABLE execucoes ADD COLUMN IF NOT EXISTS qtd_questoes_feitas INTEGER DEFAULT 0")
+        conn.execute("ALTER TABLE execucoes ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'NAO_INICIADA'")
+        conn.execute("ALTER TABLE execucoes ADD COLUMN IF NOT EXISTS tipo_estudo TEXT DEFAULT 'Outro'")
+        conn.execute("ALTER TABLE aulas ADD COLUMN IF NOT EXISTS tipo_estudo TEXT DEFAULT 'Outro'")
+        conn.execute("ALTER TABLE tarefas ADD COLUMN IF NOT EXISTS aula_id INTEGER")
+        conn.execute("ALTER TABLE tarefas ADD COLUMN IF NOT EXISTS assunto_id INTEGER")
+        _normalizar_status(conn)
+        conn.execute("DELETE FROM alunos WHERE email = 'aluno@local.com' OR nome = 'Aluno Padrão'")
+        _criar_indices(conn)
+
+
+def _criar_tabelas_sqlite():
     with conectar() as conn:
         cur = conn.cursor()
-        cur.execute(
-            """
+        cur.execute("""
             CREATE TABLE IF NOT EXISTS alunos (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 nome TEXT NOT NULL UNIQUE,
@@ -605,19 +677,15 @@ def criar_tabelas():
                 force_troca_senha INTEGER DEFAULT 1,
                 ativo INTEGER DEFAULT 1
             )
-            """
-        )
-        cur.execute(
-            """
+        """)
+        cur.execute("""
             CREATE TABLE IF NOT EXISTS disciplinas (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 nome TEXT NOT NULL UNIQUE,
                 ativo INTEGER DEFAULT 1
             )
-            """
-        )
-        cur.execute(
-            """
+        """)
+        cur.execute("""
             CREATE TABLE IF NOT EXISTS aulas (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 disciplina_id INTEGER NOT NULL,
@@ -629,10 +697,8 @@ def criar_tabelas():
                 ativo INTEGER DEFAULT 1,
                 FOREIGN KEY (disciplina_id) REFERENCES disciplinas(id)
             )
-            """
-        )
-        cur.execute(
-            """
+        """)
+        cur.execute("""
             CREATE TABLE IF NOT EXISTS assuntos (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 aula_id INTEGER NOT NULL,
@@ -641,10 +707,8 @@ def criar_tabelas():
                 UNIQUE(aula_id, titulo),
                 FOREIGN KEY (aula_id) REFERENCES aulas(id)
             )
-            """
-        )
-        cur.execute(
-            """
+        """)
+        cur.execute("""
             CREATE TABLE IF NOT EXISTS tarefas (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 numero INTEGER NOT NULL UNIQUE,
@@ -662,10 +726,8 @@ def criar_tabelas():
                 FOREIGN KEY (aula_id) REFERENCES aulas(id),
                 FOREIGN KEY (assunto_id) REFERENCES assuntos(id)
             )
-            """
-        )
-        cur.execute(
-            """
+        """)
+        cur.execute("""
             CREATE TABLE IF NOT EXISTS execucoes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 aluno_id INTEGER NOT NULL,
@@ -686,43 +748,44 @@ def criar_tabelas():
                 FOREIGN KEY (aluno_id) REFERENCES alunos(id),
                 FOREIGN KEY (tarefa_id) REFERENCES tarefas(id)
             )
-            """
-        )
-        colunas_exec = {row[1] for row in cur.execute("PRAGMA table_info(execucoes)").fetchall()}
-        if "qtd_questoes_feitas" not in colunas_exec:
-            cur.execute("ALTER TABLE execucoes ADD COLUMN qtd_questoes_feitas INTEGER DEFAULT 0")
-        if "status" not in colunas_exec:
-            cur.execute("ALTER TABLE execucoes ADD COLUMN status TEXT DEFAULT 'NAO_INICIADA'")
-        if "tipo_estudo" not in colunas_exec:
-            cur.execute("ALTER TABLE execucoes ADD COLUMN tipo_estudo TEXT DEFAULT 'Outro'")
-        colunas_aulas = {row[1] for row in cur.execute("PRAGMA table_info(aulas)").fetchall()}
-        if "tipo_estudo" not in colunas_aulas:
-            cur.execute("ALTER TABLE aulas ADD COLUMN tipo_estudo TEXT DEFAULT 'Outro'")
-        colunas_tarefas = {row[1] for row in cur.execute("PRAGMA table_info(tarefas)").fetchall()}
-        if "aula_id" not in colunas_tarefas:
-            cur.execute("ALTER TABLE tarefas ADD COLUMN aula_id INTEGER")
-        if "assunto_id" not in colunas_tarefas:
-            cur.execute("ALTER TABLE tarefas ADD COLUMN assunto_id INTEGER")
-        colunas_alunos = {row[1] for row in cur.execute("PRAGMA table_info(alunos)").fetchall()}
-        if "force_troca_senha" not in colunas_alunos:
-            cur.execute("ALTER TABLE alunos ADD COLUMN force_troca_senha INTEGER DEFAULT 0")
-        cur.execute(
-            """
-            UPDATE execucoes
-            SET status = CASE
-                WHEN status IN ('NAO_INICIADA','EM_ANDAMENTO','CONCLUIDA') THEN status
-                WHEN concluida = 1 THEN 'CONCLUIDA'
-                ELSE 'NAO_INICIADA'
-            END
-            """
-        )
-        cur.execute("UPDATE execucoes SET concluida = CASE WHEN status = 'CONCLUIDA' THEN 1 ELSE 0 END")
+        """)
+        # Migrações: adiciona colunas ausentes com segurança
+        _migrar_coluna_sqlite(cur, "execucoes", "qtd_questoes_feitas", "INTEGER DEFAULT 0")
+        _migrar_coluna_sqlite(cur, "execucoes", "status", "TEXT DEFAULT 'NAO_INICIADA'")
+        _migrar_coluna_sqlite(cur, "execucoes", "tipo_estudo", "TEXT DEFAULT 'Outro'")
+        _migrar_coluna_sqlite(cur, "aulas", "tipo_estudo", "TEXT DEFAULT 'Outro'")
+        _migrar_coluna_sqlite(cur, "tarefas", "aula_id", "INTEGER")
+        _migrar_coluna_sqlite(cur, "tarefas", "assunto_id", "INTEGER")
+        _migrar_coluna_sqlite(cur, "alunos", "force_troca_senha", "INTEGER DEFAULT 0")
+        _normalizar_status(conn)
         cur.execute("DELETE FROM alunos WHERE email = 'aluno@local.com' OR nome = 'Aluno Padrão'")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_tarefas_disciplina ON tarefas(disciplina_id)")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_tarefas_trilha ON tarefas(trilha)")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_exec_aluno ON execucoes(aluno_id)")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_exec_tarefa ON execucoes(tarefa_id)")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_exec_status ON execucoes(status)")
+        _criar_indices(conn)
+
+
+def _migrar_coluna_sqlite(cur, tabela, coluna, definicao):
+    colunas = {row[1] for row in cur.execute(f"PRAGMA table_info({tabela})").fetchall()}
+    if coluna not in colunas:
+        cur.execute(f"ALTER TABLE {tabela} ADD COLUMN {coluna} {definicao}")
+
+
+def _normalizar_status(conn):
+    conn.execute("""
+        UPDATE execucoes
+        SET status = CASE
+            WHEN status IN ('NAO_INICIADA','EM_ANDAMENTO','CONCLUIDA') THEN status
+            WHEN concluida = 1 THEN 'CONCLUIDA'
+            ELSE 'NAO_INICIADA'
+        END
+    """)
+    conn.execute("UPDATE execucoes SET concluida = CASE WHEN status = 'CONCLUIDA' THEN 1 ELSE 0 END")
+
+
+def _criar_indices(conn):
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_tarefas_disciplina ON tarefas(disciplina_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_tarefas_trilha ON tarefas(trilha)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_exec_aluno ON execucoes(aluno_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_exec_tarefa ON execucoes(tarefa_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_exec_status ON execucoes(status)")
 
 
 def inserir_admin():
@@ -734,6 +797,10 @@ def inserir_admin():
         )
 
 
+# ─────────────────────────────────────────────
+# CACHE
+# ─────────────────────────────────────────────
+
 def limpar_cache():
     carregar_visao_tarefas.clear()
     carregar_execucoes.clear()
@@ -741,6 +808,10 @@ def limpar_cache():
     carregar_assuntos.clear()
     carregar_tarefas_base.clear()
 
+
+# ─────────────────────────────────────────────
+# UPSERTS
+# ─────────────────────────────────────────────
 
 def upsert_disciplina(conn, nome):
     nome = limpar_texto(nome)
@@ -761,19 +832,12 @@ def upsert_aula(conn, disciplina_id, aula, estudada="Não", revisao="Não", tipo
     ).fetchone()
     if existente:
         conn.execute(
-            """
-            UPDATE aulas
-            SET estudada_padrao = ?, revisao_24h_padrao = ?, tipo_estudo = ?, ativo = 1
-            WHERE id = ?
-            """,
+            "UPDATE aulas SET estudada_padrao = ?, revisao_24h_padrao = ?, tipo_estudo = ?, ativo = 1 WHERE id = ?",
             (estudada or "Não", revisao or "Não", normalizar_tipo_estudo(tipo_estudo), int(existente[0])),
         )
         return int(existente[0])
     conn.execute(
-        """
-        INSERT INTO aulas (disciplina_id, aula, estudada_padrao, revisao_24h_padrao, tipo_estudo, ativo)
-        VALUES (?, ?, ?, ?, ?, 1)
-        """,
+        "INSERT INTO aulas (disciplina_id, aula, estudada_padrao, revisao_24h_padrao, tipo_estudo, ativo) VALUES (?, ?, ?, ?, ?, 1)",
         (int(disciplina_id), aula, estudada or "Não", revisao or "Não", normalizar_tipo_estudo(tipo_estudo)),
     )
     return ultimo_id(conn)
@@ -782,17 +846,10 @@ def upsert_aula(conn, disciplina_id, aula, estudada="Não", revisao="Não", tipo
 def upsert_assunto(conn, aula_id, titulo):
     titulo = limpar_texto(titulo) or "Conteúdo não informado"
     conn.execute(
-        """
-        INSERT INTO assuntos (aula_id, titulo, ativo)
-        VALUES (?, ?, 1)
-        ON CONFLICT(aula_id, titulo) DO UPDATE SET ativo = 1
-        """,
+        "INSERT INTO assuntos (aula_id, titulo, ativo) VALUES (?, ?, 1) ON CONFLICT(aula_id, titulo) DO UPDATE SET ativo = 1",
         (int(aula_id), titulo),
     )
-    return conn.execute(
-        "SELECT id FROM assuntos WHERE aula_id = ? AND titulo = ?",
-        (int(aula_id), titulo),
-    ).fetchone()[0]
+    return conn.execute("SELECT id FROM assuntos WHERE aula_id = ? AND titulo = ?", (int(aula_id), titulo)).fetchone()[0]
 
 
 def upsert_execucao(
@@ -813,7 +870,9 @@ def upsert_execucao(
         status = STATUS_NAO_INICIADA
     tipo_estudo = normalizar_tipo_estudo(tipo_estudo)
     if tipo_estudo == "Outro":
-        tarefa_tipo = conn.execute("SELECT COALESCE(tipo, 'Outro') FROM tarefas WHERE id = ?", (int(tarefa_id),)).fetchone()
+        tarefa_tipo = conn.execute(
+            "SELECT COALESCE(tipo, 'Outro') FROM tarefas WHERE id = ?", (int(tarefa_id),)
+        ).fetchone()
         tipo_estudo = normalizar_tipo_estudo(tarefa_tipo[0] if tarefa_tipo else None)
     questoes = int(round(questoes_feitas or 0))
     acertos = int(acertos or 0)
@@ -822,45 +881,34 @@ def upsert_execucao(
     conn.execute(
         """
         INSERT INTO execucoes
-        (aluno_id, tarefa_id, data_execucao, ch_efetiva, data_revisao_24h, ch_revisao,
-         qtd_questoes_feitas, qtd_acertos, desempenho, status, comentario, concluida, tipo_estudo)
+            (aluno_id, tarefa_id, data_execucao, ch_efetiva, data_revisao_24h, ch_revisao,
+             qtd_questoes_feitas, qtd_acertos, desempenho, status, comentario, concluida, tipo_estudo)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(aluno_id, tarefa_id) DO UPDATE SET
-            data_execucao = excluded.data_execucao,
-            ch_efetiva = excluded.ch_efetiva,
-            data_revisao_24h = excluded.data_revisao_24h,
-            ch_revisao = excluded.ch_revisao,
-            qtd_questoes_feitas = excluded.qtd_questoes_feitas,
-            qtd_acertos = excluded.qtd_acertos,
-            desempenho = excluded.desempenho,
-            status = excluded.status,
-            comentario = excluded.comentario,
-            concluida = excluded.concluida,
-            tipo_estudo = excluded.tipo_estudo,
-            atualizado_em = CURRENT_TIMESTAMP
+            data_execucao      = excluded.data_execucao,
+            ch_efetiva         = excluded.ch_efetiva,
+            data_revisao_24h   = excluded.data_revisao_24h,
+            ch_revisao         = excluded.ch_revisao,
+            qtd_questoes_feitas= excluded.qtd_questoes_feitas,
+            qtd_acertos        = excluded.qtd_acertos,
+            desempenho         = excluded.desempenho,
+            status             = excluded.status,
+            comentario         = excluded.comentario,
+            concluida          = excluded.concluida,
+            tipo_estudo        = excluded.tipo_estudo,
+            atualizado_em      = CURRENT_TIMESTAMP
         """,
         (
-            int(aluno_id),
-            int(tarefa_id),
-            data_execucao,
-            float(ch_efetiva or 0),
-            data_revisao,
-            float(ch_revisao or 0),
-            questoes,
-            acertos,
-            desempenho,
-            status,
-            comentario,
-            concluida,
-            tipo_estudo,
+            int(aluno_id), int(tarefa_id), data_execucao,
+            float(ch_efetiva or 0), data_revisao, float(ch_revisao or 0),
+            questoes, acertos, desempenho, status, comentario, concluida, tipo_estudo,
         ),
     )
 
 
-# =====================================================
+# ─────────────────────────────────────────────
 # IMPORTADORES
-# =====================================================
-
+# ─────────────────────────────────────────────
 
 def importar_planilha_referencia(caminho=PLANILHA_REFERENCIA, substituir=True):
     caminho = Path(caminho)
@@ -892,18 +940,16 @@ def importar_planilha_referencia(caminho=PLANILHA_REFERENCIA, substituir=True):
                 raw = pd.read_excel(caminho, sheet_name=aba, header=None, nrows=1)
                 nome_disciplina = limpar_texto(raw.iloc[0, 0]) or aba
                 disciplina_id = upsert_disciplina(conn, nome_disciplina)
-                aulas = pd.read_excel(caminho, sheet_name=aba, header=1).dropna(how="all")
-                if "Aula" not in aulas.columns or "Assunto" not in aulas.columns:
+                aulas_df = pd.read_excel(caminho, sheet_name=aba, header=1).dropna(how="all")
+                if "Aula" not in aulas_df.columns or "Assunto" not in aulas_df.columns:
                     continue
-                for _, row in aulas.iterrows():
+                for _, row in aulas_df.iterrows():
                     aula = limpar_texto(row.get("Aula"))
                     assunto = limpar_texto(row.get("Assunto"))
                     if not aula or not assunto:
                         continue
                     aula_id = upsert_aula(
-                        conn,
-                        disciplina_id,
-                        aula,
+                        conn, disciplina_id, aula,
                         limpar_texto(row.get("Estudada")) or "Não",
                         limpar_texto(row.get("Revisão 24h")) or "Não",
                     )
@@ -923,8 +969,8 @@ def importar_planilha_referencia(caminho=PLANILHA_REFERENCIA, substituir=True):
                 conn.execute(
                     """
                     INSERT INTO tarefas
-                    (numero, trilha, disciplina_id, seq_disciplina, aula, qtd_exercicios_previstos,
-                     tipo, conteudo, ativo, aula_id, assunto_id)
+                        (numero, trilha, disciplina_id, seq_disciplina, aula, qtd_exercicios_previstos,
+                         tipo, conteudo, ativo, aula_id, assunto_id)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
                     ON CONFLICT(numero) DO UPDATE SET
                         trilha = excluded.trilha,
@@ -1033,17 +1079,9 @@ def importar_execucoes_ciclo(caminho_excel):
                 ch_por_tarefa = ch_total / len(tarefas_match) if tarefas_match else 0
                 for idx, (tarefa_id, _) in enumerate(tarefas_match):
                     upsert_execucao(
-                        conn,
-                        aluno_id,
-                        tarefa_id,
-                        str(data_execucao),
-                        ch_por_tarefa,
-                        None,
-                        0,
-                        acertos_dist[idx],
-                        comentario,
-                        questoes_dist[idx],
-                        STATUS_CONCLUIDA,
+                        conn, aluno_id, tarefa_id, str(data_execucao),
+                        ch_por_tarefa, None, 0, acertos_dist[idx],
+                        comentario, questoes_dist[idx], STATUS_CONCLUIDA,
                     )
     except Exception as exc:
         erro_usuario(f"Importação cancelada para {caminho_excel.name}.", exc)
@@ -1052,10 +1090,9 @@ def importar_execucoes_ciclo(caminho_excel):
     return True
 
 
-# =====================================================
-# CONSULTAS
-# =====================================================
-
+# ─────────────────────────────────────────────
+# CONSULTAS COM CACHE
+# ─────────────────────────────────────────────
 
 @st.cache_data(ttl=20)
 def carregar_visao_tarefas(aluno_id=None):
@@ -1071,6 +1108,7 @@ def carregar_visao_tarefas(aluno_id=None):
             t.numero AS tarefa,
             t.trilha,
             d.nome AS disciplina,
+            t.disciplina_id,
             t.aula_id,
             t.assunto_id,
             COALESCE(ass.titulo, t.conteudo) AS assunto,
@@ -1217,10 +1255,9 @@ def disciplinas_ativas():
     return consultar("SELECT id, nome FROM disciplinas WHERE ativo = 1 ORDER BY nome")
 
 
-# =====================================================
+# ─────────────────────────────────────────────
 # FILTROS E MÉTRICAS
-# =====================================================
-
+# ─────────────────────────────────────────────
 
 def periodo_datas(periodo):
     hoje = date.today()
@@ -1251,7 +1288,9 @@ def painel_filtros(df, prefixo="dash"):
             st.session_state[f"{prefixo}_{chave}"] = valor
         st.rerun()
 
-    periodo = st.sidebar.selectbox("Período", ["Todos", "Hoje", "Semana", "Mês", "Ano", "Personalizado"], key=f"{prefixo}_periodo")
+    periodo = st.sidebar.selectbox(
+        "Período", ["Todos", "Hoje", "Semana", "Mês", "Ano", "Personalizado"], key=f"{prefixo}_periodo"
+    )
     inicio_padrao, fim_padrao = periodo_datas(periodo)
     if periodo == "Personalizado":
         inicio = st.sidebar.date_input("Data inicial", value=inicio_padrao or date.today(), key=f"{prefixo}_inicio")
@@ -1268,36 +1307,28 @@ def painel_filtros(df, prefixo="dash"):
         aluno = st.sidebar.selectbox("Aluno", alunos, key=f"{prefixo}_aluno")
 
     disciplinas = sorted(df["disciplina"].dropna().unique().tolist())
-    assuntos = sorted(df["assunto"].dropna().unique().tolist())
-    aulas = sorted(df["aula"].dropna().unique().tolist())
-    tipos = sorted(df["tipo"].dropna().unique().tolist())
+    assuntos    = sorted(df["assunto"].dropna().unique().tolist())
+    aulas       = sorted(df["aula"].dropna().unique().tolist())
+    tipos       = sorted(df["tipo"].dropna().unique().tolist())
+
     status_escolhidos = st.sidebar.multiselect(
-        "Status",
-        STATUS_VALIDOS,
-        default=STATUS_VALIDOS,
-        format_func=lambda valor: STATUS_LABELS.get(valor, valor),
-        key=f"{prefixo}_status",
+        "Status", STATUS_VALIDOS, default=STATUS_VALIDOS,
+        format_func=lambda v: STATUS_LABELS.get(v, v), key=f"{prefixo}_status",
     )
-    disciplina = st.sidebar.multiselect("Disciplinas", disciplinas, key=f"{prefixo}_disciplina")
-    aula = st.sidebar.multiselect("Aulas", aulas, key=f"{prefixo}_aula")
-    assunto = st.sidebar.multiselect("Assuntos", assuntos, key=f"{prefixo}_assunto")
-    tipo = st.sidebar.multiselect("Tipos de estudo", tipos, key=f"{prefixo}_tipo")
-    minimo_horas = st.sidebar.number_input("Tempo mínimo estudado", min_value=0.0, value=0.0, step=0.25, key=f"{prefixo}_min_horas")
-    recentes = st.sidebar.toggle("Atividades recentes", value=False, key=f"{prefixo}_recentes")
+    disciplina    = st.sidebar.multiselect("Disciplinas", disciplinas, key=f"{prefixo}_disciplina")
+    aula          = st.sidebar.multiselect("Aulas", aulas, key=f"{prefixo}_aula")
+    assunto       = st.sidebar.multiselect("Assuntos", assuntos, key=f"{prefixo}_assunto")
+    tipo          = st.sidebar.multiselect("Tipos de estudo", tipos, key=f"{prefixo}_tipo")
+    minimo_horas  = st.sidebar.number_input("Tempo mínimo estudado", min_value=0.0, value=0.0, step=0.25, key=f"{prefixo}_min_horas")
+    recentes      = st.sidebar.toggle("Atividades recentes", value=False, key=f"{prefixo}_recentes")
 
     nome_filtro = st.sidebar.text_input("Nome para salvar filtro", key=f"{prefixo}_nome_filtro")
     if st.sidebar.button("Salvar filtro favorito", use_container_width=True, key=f"{prefixo}_salvar_filtro"):
         if nome_filtro:
             favoritos[nome_filtro] = {
-                "periodo": periodo,
-                "aluno": aluno,
-                "status": status_escolhidos,
-                "disciplina": disciplina,
-                "aula": aula,
-                "assunto": assunto,
-                "tipo": tipo,
-                "min_horas": minimo_horas,
-                "recentes": recentes,
+                "periodo": periodo, "aluno": aluno, "status": status_escolhidos,
+                "disciplina": disciplina, "aula": aula, "assunto": assunto,
+                "tipo": tipo, "min_horas": minimo_horas, "recentes": recentes,
             }
             st.success("Filtro salvo.")
 
@@ -1332,34 +1363,32 @@ def base_metricas(df):
 
 
 def calcular_metricas(df):
-    analisavel = base_metricas(df)
-    concluidas = analisavel[analisavel["status"] == STATUS_CONCLUIDA]
-    andamento = analisavel[analisavel["status"] == STATUS_EM_ANDAMENTO]
-    total = int(len(analisavel))
-    qtd_concluidas = int(len(concluidas))
-    progresso = qtd_concluidas / total * 100 if total else 0
-    horas = float(analisavel["ch_efetiva"].sum())
-    questoes = int(analisavel["qtd_questoes_feitas"].sum())
-    acertos = int(analisavel["qtd_acertos"].sum())
-    desempenho = acertos / questoes * 100 if questoes else 0
-    dias = analisavel["data_ref"].dropna().dt.date.nunique() if "data_ref" in analisavel else 0
-    media_dia = horas / dias if dias else 0
-    produtividade = qtd_concluidas / horas if horas else 0
+    analisavel   = base_metricas(df)
+    concluidas   = analisavel[analisavel["status"] == STATUS_CONCLUIDA]
+    andamento    = analisavel[analisavel["status"] == STATUS_EM_ANDAMENTO]
+    total        = len(analisavel)
+    qtd_conc     = len(concluidas)
+    progresso    = qtd_conc / total * 100 if total else 0
+    horas        = float(analisavel["ch_efetiva"].sum())
+    questoes     = int(analisavel["qtd_questoes_feitas"].sum())
+    acertos      = int(analisavel["qtd_acertos"].sum())
+    desempenho   = acertos / questoes * 100 if questoes else 0
+    dias         = analisavel["data_ref"].dropna().dt.date.nunique() if "data_ref" in analisavel else 0
     return {
         "analisavel": analisavel,
         "concluidas_df": concluidas,
         "andamento_df": andamento,
         "total": total,
-        "concluidas": qtd_concluidas,
-        "andamento": int(len(andamento)),
-        "nao_iniciadas": int(len(df[df["status"] == STATUS_NAO_INICIADA])),
+        "concluidas": qtd_conc,
+        "andamento": len(andamento),
+        "nao_iniciadas": len(df[df["status"] == STATUS_NAO_INICIADA]),
         "progresso": progresso,
         "horas": horas,
         "questoes": questoes,
         "acertos": acertos,
         "desempenho": desempenho,
-        "media_dia": media_dia,
-        "produtividade": produtividade,
+        "media_dia": horas / dias if dias else 0,
+        "produtividade": qtd_conc / horas if horas else 0,
     }
 
 
@@ -1383,10 +1412,9 @@ def preparar_tabela(df):
     return tabela
 
 
-# =====================================================
-# LOGIN
-# =====================================================
-
+# ─────────────────────────────────────────────
+# TELA: LOGIN
+# ─────────────────────────────────────────────
 
 def tela_login():
     render_html(f"""
@@ -1394,7 +1422,7 @@ def tela_login():
           <h1>{APP_NAME}</h1>
           <p>Acompanhamento de estudos, produtividade, tarefas educacionais e desempenho por aluno.</p>
         </div>
-        """)
+    """)
     with st.expander("Usuário inicial"):
         st.write(f"Gestor: **{ADMIN_EMAIL}** / senha **{ADMIN_PASSWORD}**")
     with st.form("login"):
@@ -1417,7 +1445,7 @@ def tela_troca_obrigatoria():
           <h1>{APP_NAME}</h1>
           <p>Por segurança, altere sua senha inicial antes de acessar o sistema.</p>
         </div>
-        """)
+    """)
     with st.form("troca_obrigatoria"):
         nova = st.text_input("Nova senha", type="password")
         confirmar = st.text_input("Confirmar nova senha", type="password")
@@ -1435,10 +1463,9 @@ def tela_troca_obrigatoria():
             st.rerun()
 
 
-# =====================================================
-# DASHBOARD
-# =====================================================
-
+# ─────────────────────────────────────────────
+# TELA: DASHBOARD
+# ─────────────────────────────────────────────
 
 def dashboard():
     render_html(f"""
@@ -1446,7 +1473,7 @@ def dashboard():
           <h1>{APP_NAME}</h1>
           <p>Visão consolidada, análise individual, evolução e comparação entre alunos.</p>
         </div>
-        """)
+    """)
     df = carregar_execucoes()
     if df.empty:
         st.info("Cadastre alunos, tarefas e registros para iniciar o acompanhamento.")
@@ -1466,9 +1493,9 @@ def dashboard():
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Taxa de conclusão", f"{metricas['progresso']:.1f}%")
-    c2.metric("Tarefas concluídas", f"{metricas['concluidas']}")
-    c3.metric("Tarefas em andamento", f"{metricas['andamento']}")
-    c4.metric("Não iniciadas", f"{metricas['nao_iniciadas']}")
+    c2.metric("Tarefas concluídas", metricas["concluidas"])
+    c3.metric("Em andamento", metricas["andamento"])
+    c4.metric("Não iniciadas", metricas["nao_iniciadas"])
 
     c5, c6, c7, c8 = st.columns(4)
     c5.metric("Horas estudadas", f"{metricas['horas']:.2f}")
@@ -1486,32 +1513,29 @@ def dashboard():
             .rename(columns={"tarefa_id": "tarefas"})
         )
         status_df["status_label"] = status_df["status"].map(STATUS_LABELS)
-        fig_status = px.bar(
-            status_df,
-            x="status_label",
-            y="tarefas",
-            color="status",
-            color_discrete_map=STATUS_CORES,
-            text_auto=True,
-            title="Distribuição das atividades por status",
-            labels={"status_label": "Status da atividade", "tarefas": "Quantidade de tarefas", "status": "Legenda"},
+        col_a.plotly_chart(
+            fig_layout(px.bar(
+                status_df, x="status_label", y="tarefas", color="status",
+                color_discrete_map=STATUS_CORES, text_auto=True,
+                title="Distribuição das atividades por status",
+                labels={"status_label": "Status", "tarefas": "Quantidade", "status": "Legenda"},
+            )),
+            use_container_width=True,
         )
-        col_a.plotly_chart(fig_layout(fig_status), use_container_width=True)
         if not analisavel.empty:
             por_aluno = (
                 analisavel.groupby("aluno", as_index=False)
                 .agg(horas=("ch_efetiva", "sum"), concluidas=("status", lambda s: (s == STATUS_CONCLUIDA).sum()))
                 .sort_values("horas", ascending=False)
             )
-            fig_aluno = px.bar(
-                por_aluno,
-                x="aluno",
-                y=["horas", "concluidas"],
-                barmode="group",
-                title="Produtividade consolidada por aluno",
-                labels={"aluno": "Aluno", "value": "Total", "variable": "Indicador"},
+            col_b.plotly_chart(
+                fig_layout(px.bar(
+                    por_aluno, x="aluno", y=["horas", "concluidas"], barmode="group",
+                    title="Produtividade consolidada por aluno",
+                    labels={"aluno": "Aluno", "value": "Total", "variable": "Indicador"},
+                )),
+                use_container_width=True,
             )
-            col_b.plotly_chart(fig_layout(fig_aluno), use_container_width=True)
         else:
             col_b.info("Sem atividades iniciadas ou concluídas para os filtros.")
 
@@ -1529,34 +1553,20 @@ def dashboard():
                     concluidas=("status", lambda s: (s == STATUS_CONCLUIDA).sum()),
                 )
             )
-            disc["progresso"] = disc["concluidas"] / disc["tarefas"] * 100
+            disc["progresso"]  = disc["concluidas"] / disc["tarefas"] * 100
             disc["desempenho"] = disc.apply(lambda r: r["acertos"] / r["questoes"] * 100 if r["questoes"] else 0, axis=1)
             disc["disciplina_label"] = disc["disciplina"].apply(quebrar_texto)
             col_a, col_b = st.columns(2)
             col_a.plotly_chart(
-                fig_layout(
-                    px.bar(
-                        disc.sort_values("progresso"),
-                        x="disciplina_label",
-                        y="progresso",
-                        text_auto=".1f",
-                        title="Progresso por disciplina",
-                        labels={"disciplina_label": "Disciplina", "progresso": "% concluído"},
-                    )
-                ),
+                fig_layout(px.bar(disc.sort_values("progresso"), x="disciplina_label", y="progresso",
+                    text_auto=".1f", title="Progresso por disciplina",
+                    labels={"disciplina_label": "Disciplina", "progresso": "% concluído"})),
                 use_container_width=True,
             )
             col_b.plotly_chart(
-                fig_layout(
-                    px.bar(
-                        disc.sort_values("horas", ascending=False),
-                        x="disciplina_label",
-                        y="horas",
-                        text_auto=".1f",
-                        title="Tempo estudado por disciplina",
-                        labels={"disciplina_label": "Disciplina", "horas": "Horas efetivas"},
-                    )
-                ),
+                fig_layout(px.bar(disc.sort_values("horas", ascending=False), x="disciplina_label", y="horas",
+                    text_auto=".1f", title="Tempo estudado por disciplina",
+                    labels={"disciplina_label": "Disciplina", "horas": "Horas efetivas"})),
                 use_container_width=True,
             )
             st.dataframe(disc.drop(columns=["disciplina_label"]), use_container_width=True, hide_index=True)
@@ -1572,21 +1582,11 @@ def dashboard():
             )
             tipos["produtividade"] = tipos.apply(lambda r: r["tarefas"] / r["horas"] if r["horas"] else 0, axis=1)
             col_a, col_b = st.columns(2)
-            col_a.plotly_chart(
-                fig_layout(px.pie(tipos, names="tipo", values="horas", title="Tipos de estudo mais utilizados")),
-                use_container_width=True,
-            )
+            col_a.plotly_chart(fig_layout(px.pie(tipos, names="tipo", values="horas", title="Tipos de estudo mais utilizados")), use_container_width=True)
             col_b.plotly_chart(
-                fig_layout(
-                    px.bar(
-                        tipos,
-                        x="tipo",
-                        y="produtividade",
-                        text_auto=".2f",
-                        title="Produtividade por tipo de estudo",
-                        labels={"tipo": "Tipo de estudo", "produtividade": "Tarefas por hora"},
-                    )
-                ),
+                fig_layout(px.bar(tipos, x="tipo", y="produtividade", text_auto=".2f",
+                    title="Produtividade por tipo de estudo",
+                    labels={"tipo": "Tipo de estudo", "produtividade": "Tarefas por hora"})),
                 use_container_width=True,
             )
             st.dataframe(tipos, use_container_width=True, hide_index=True)
@@ -1606,87 +1606,60 @@ def dashboard():
                     disciplinas=("disciplina", "nunique"),
                 )
             )
-            comp["desempenho"] = comp.apply(lambda r: r["acertos"] / r["questoes"] * 100 if r["questoes"] else 0, axis=1)
+            comp["desempenho"]   = comp.apply(lambda r: r["acertos"] / r["questoes"] * 100 if r["questoes"] else 0, axis=1)
             comp["produtividade"] = comp.apply(lambda r: r["concluidas"] / r["horas"] if r["horas"] else 0, axis=1)
             comp = comp.sort_values(["produtividade", "concluidas"], ascending=False)
             st.plotly_chart(
-                fig_layout(
-                    px.scatter(
-                        comp,
-                        x="horas",
-                        y="concluidas",
-                        size="questoes",
-                        color="desempenho",
-                        hover_name="aluno",
-                        title="Comparação entre alunos: tempo, conclusão e desempenho",
-                        labels={"horas": "Horas estudadas", "concluidas": "Tarefas concluídas", "desempenho": "Desempenho (%)"},
-                    )
-                ),
+                fig_layout(px.scatter(
+                    comp, x="horas", y="concluidas", size="questoes", color="desempenho", hover_name="aluno",
+                    title="Comparação entre alunos: tempo, conclusão e desempenho",
+                    labels={"horas": "Horas estudadas", "concluidas": "Tarefas concluídas", "desempenho": "Desempenho (%)"},
+                )),
                 use_container_width=True,
             )
             st.dataframe(comp, use_container_width=True, hide_index=True)
 
     with abas[4]:
-        evolucao = analisavel.dropna(subset=["data_ref"]).copy()
+        evolucao = analisavel.dropna(subset=["data_ref"]).copy() if not analisavel.empty else pd.DataFrame()
         if evolucao.empty:
             st.info("Sem datas de execução para evolução.")
         else:
             evolucao["dia"] = evolucao["data_ref"].dt.date
-            diario = (
-                evolucao.groupby(["dia", "status"], as_index=False)
-                .agg(horas=("ch_efetiva", "sum"), tarefas=("tarefa_id", "count"))
-            )
+            diario = evolucao.groupby(["dia", "status"], as_index=False).agg(horas=("ch_efetiva", "sum"), tarefas=("tarefa_id", "count"))
             diario["dia_label"] = pd.to_datetime(diario["dia"]).dt.strftime("%d/%m/%Y")
-            fig_diario = px.bar(
-                diario,
-                x="dia_label",
-                y="horas",
-                color="status",
-                color_discrete_map=STATUS_CORES,
-                title="Evolução diária da carga horária efetiva",
-                labels={
-                    "dia_label": "Data de estudo",
-                    "horas": "Carga horária efetiva (horas)",
-                    "status": "Status considerado na análise",
-                },
-                hover_data={"tarefas": True, "dia": False},
+            st.plotly_chart(
+                fig_layout(px.bar(diario, x="dia_label", y="horas", color="status", color_discrete_map=STATUS_CORES,
+                    title="Evolução diária da carga horária efetiva",
+                    labels={"dia_label": "Data", "horas": "Carga horária (h)", "status": "Status"},
+                    hover_data={"tarefas": True, "dia": False})),
+                use_container_width=True,
             )
-            st.plotly_chart(fig_layout(fig_diario), use_container_width=True)
             semanal = evolucao.set_index("data_ref").resample("W")["ch_efetiva"].sum().reset_index()
             semanal["semana"] = semanal["data_ref"].dt.strftime("%d/%m/%Y")
             st.plotly_chart(
-                fig_layout(
-                    px.line(
-                        semanal,
-                        x="semana",
-                        y="ch_efetiva",
-                        markers=True,
-                        title="Evolução semanal/mensal de estudos",
-                        labels={"semana": "Semana encerrada em", "ch_efetiva": "Horas efetivas"},
-                    )
-                ),
+                fig_layout(px.line(semanal, x="semana", y="ch_efetiva", markers=True,
+                    title="Evolução semanal de estudos",
+                    labels={"semana": "Semana encerrada em", "ch_efetiva": "Horas efetivas"})),
                 use_container_width=True,
             )
 
     with abas[5]:
         if analisavel.empty:
-            st.info("Sem atividades iniciadas ou concluídas para análise automatizada.")
+            st.info("Sem atividades iniciadas ou concluídas para análise.")
         else:
-            alunos = ["Todos"] if visao == "Todos" else [visao]
-            if visao == "Todos":
-                alunos = sorted(analisavel["aluno"].dropna().unique().tolist())
-            for aluno in alunos:
+            alunos_lista = sorted(analisavel["aluno"].dropna().unique().tolist()) if visao == "Todos" else [visao]
+            for aluno in alunos_lista:
                 grupo = analisavel[analisavel["aluno"] == aluno] if aluno != "Todos" else analisavel
                 m = calcular_metricas(grupo)
                 st.markdown(f"**{aluno}**")
                 if m["horas"] == 0:
                     st.warning("Sem carga horária registrada nas atividades iniciadas ou concluídas.")
                 elif m["desempenho"] and m["desempenho"] < 70:
-                    st.warning(f"Desempenho de {m['desempenho']:.1f}%. Reforce revisão ativa e questões comentadas nas disciplinas com menor aproveitamento.")
+                    st.warning(f"Desempenho de {m['desempenho']:.1f}%. Reforce revisão ativa e questões comentadas.")
                 elif m["progresso"] < 45:
-                    st.info(f"Taxa de conclusão de {m['progresso']:.1f}%. Priorize concluir atividades já iniciadas antes de abrir novas.")
+                    st.info(f"Taxa de conclusão de {m['progresso']:.1f}%. Priorize concluir atividades já iniciadas.")
                 else:
-                    st.success(f"Ritmo consistente: {m['horas']:.1f}h registradas, {m['concluidas']} tarefas concluídas e {m['produtividade']:.2f} tarefas/h.")
+                    st.success(f"Ritmo consistente: {m['horas']:.1f}h, {m['concluidas']} tarefas concluídas, {m['produtividade']:.2f} tarefas/h.")
                 fracas = (
                     grupo.groupby("disciplina", as_index=False)
                     .agg(questoes=("qtd_questoes_feitas", "sum"), acertos=("qtd_acertos", "sum"), horas=("ch_efetiva", "sum"))
@@ -1698,36 +1671,17 @@ def dashboard():
 
     with abas[6]:
         tabela = preparar_tabela(df_filtrado)
-        st.dataframe(
-            tabela[
-                [
-                    "aluno",
-                    "tarefa",
-                    "disciplina",
-                    "aula",
-                    "assunto",
-                    "tipo",
-                    "status_label",
-                    "data_execucao",
-                    "ch_efetiva",
-                    "qtd_questoes_feitas",
-                    "qtd_acertos",
-                    "desempenho",
-                    "comentario",
-                ]
-            ],
-            use_container_width=True,
-            hide_index=True,
-            row_height=72,
-        )
+        colunas = ["aluno", "tarefa", "disciplina", "aula", "assunto", "tipo", "status_label", "data_execucao", "ch_efetiva", "qtd_questoes_feitas", "qtd_acertos", "desempenho", "comentario"]
+        colunas_disp = [c for c in colunas if c in tabela.columns]
+        st.dataframe(tabela[colunas_disp], use_container_width=True, hide_index=True, row_height=72)
 
 
-# =====================================================
-# REGISTRO RÁPIDO
-# =====================================================
-
+# ─────────────────────────────────────────────
+# TELA: REGISTRO RÁPIDO
+# ─────────────────────────────────────────────
 
 def ultima_atividade(aluno_id=None):
+    """Retorna o registro mais recente iniciado ou concluído do aluno."""
     filtro = ""
     params = []
     if aluno_id:
@@ -1738,7 +1692,8 @@ def ultima_atividade(aluno_id=None):
         SELECT
             e.id AS execucao_id, al.nome AS aluno, t.numero AS tarefa, d.nome AS disciplina,
             COALESCE(ass.titulo, t.conteudo) AS assunto, COALESCE(t.tipo, 'Outro') AS tipo,
-            e.status, e.data_execucao, e.ch_efetiva, e.comentario, e.atualizado_em, e.tarefa_id, e.aluno_id
+            e.status, e.data_execucao, e.ch_efetiva, e.comentario, e.atualizado_em,
+            e.tarefa_id, e.aluno_id
         FROM execucoes e
         JOIN alunos al ON al.id = e.aluno_id AND al.ativo = 1
         JOIN tarefas t ON t.id = e.tarefa_id AND t.ativo = 1
@@ -1761,25 +1716,169 @@ def exibir_card_ultima(atividade):
     render_html(f"""
         <div class="quick-card {classe}">
           <div class="quick-label">Última atividade registrada</div>
-          <h3 style="margin:4px 0 0 0;">Tarefa {escape_html(atividade['tarefa'])} · {escape_html(atividade['disciplina'])}</h3>
-          <div style="margin-top:8px;">{status_badge(atividade['status'])}</div>
+          <h3>Tarefa {escape_html(atividade['tarefa'])} · {escape_html(atividade['disciplina'])}</h3>
+          <div>{status_badge(atividade['status'])}</div>
           <div class="quick-grid">
-            <div class="quick-item"><div class="quick-label">Aluno</div><div class="quick-value">{escape_html(atividade['aluno'])}</div></div>
-            <div class="quick-item"><div class="quick-label">Assunto</div><div class="quick-value">{escape_html(atividade['assunto'] or '-')}</div></div>
-            <div class="quick-item"><div class="quick-label">Tipo</div><div class="quick-value">{escape_html(atividade['tipo'])}</div></div>
-            <div class="quick-item"><div class="quick-label">Tempo</div><div class="quick-value">{float(atividade['ch_efetiva'] or 0):.2f}h</div></div>
-            <div class="quick-item"><div class="quick-label">Data</div><div class="quick-value">{escape_html(formatar_data_br(atividade['data_execucao']))}</div></div>
-            <div class="quick-item"><div class="quick-label">Atualização</div><div class="quick-value">{escape_html(atividade['atualizado_em'])}</div></div>
-            <div class="quick-item" style="grid-column: span 2;"><div class="quick-label">Observações</div><div class="quick-value">{escape_html(atividade['comentario'] or '-')}</div></div>
+            <div class="quick-item"><div class="quick-label">Aluno</div>
+              <div class="quick-value">{escape_html(atividade['aluno'])}</div></div>
+            <div class="quick-item"><div class="quick-label">Assunto</div>
+              <div class="quick-value">{escape_html(atividade['assunto'] or '-')}</div></div>
+            <div class="quick-item"><div class="quick-label">Tipo</div>
+              <div class="quick-value">{escape_html(atividade['tipo'])}</div></div>
+            <div class="quick-item"><div class="quick-label">Tempo</div>
+              <div class="quick-value">{float(atividade['ch_efetiva'] or 0):.2f}h</div></div>
+            <div class="quick-item"><div class="quick-label">Data</div>
+              <div class="quick-value">{escape_html(formatar_data_br(atividade['data_execucao']))}</div></div>
+            <div class="quick-item"><div class="quick-label">Atualização</div>
+              <div class="quick-value">{escape_html(str(atividade['atualizado_em']))}</div></div>
+            <div class="quick-item" style="grid-column: span 2;"><div class="quick-label">Observações</div>
+              <div class="quick-value">{escape_html(atividade['comentario'] or '-')}</div></div>
           </div>
         </div>
+    """)
+
+
+def _label_tarefa(row) -> str:
+    return f"Tarefa {int(row['tarefa'])} — {row['disciplina']} | {str(row['assunto'] or row['conteudo'] or '')[:60]}"
+
+
+def _verificar_regra_andamento(tarefas_df: pd.DataFrame, tarefa_selecionada, novo_status: str, disciplina_id: int) -> tuple[bool, str]:
+    """
+    Regra: uma tarefa NAO_INICIADA só pode ser iniciada se não existir outra
+    tarefa em andamento para a mesma disciplina.
+    Retorna (pode_salvar, mensagem_de_erro).
+    """
+    status_atual = str(tarefa_selecionada.get("status", STATUS_NAO_INICIADA))
+    if status_atual != STATUS_NAO_INICIADA:
+        return True, ""
+    if novo_status == STATUS_NAO_INICIADA:
+        return True, ""
+
+    # Há alguma outra tarefa em andamento na mesma disciplina?
+    outras_em_andamento = tarefas_df[
+        (tarefas_df["status"] == STATUS_EM_ANDAMENTO)
+        & (tarefas_df["disciplina_id"] == disciplina_id)
+        & (tarefas_df["tarefa_id"] != tarefa_selecionada["tarefa_id"])
+    ]
+    if outras_em_andamento.empty:
+        return True, ""
+
+    tarefa_bloqueante = outras_em_andamento.iloc[0]
+    msg = (
+        f"❌ Não é possível iniciar esta tarefa. "
+        f"A Tarefa {int(tarefa_bloqueante['tarefa'])} ({tarefa_bloqueante['disciplina']}) "
+        f"está em andamento. Conclua ou atualize essa tarefa antes de iniciar outra na mesma disciplina."
+    )
+    return False, msg
+
+
+def _formulario_registro(tarefa, prefixo="rr", mostrar_confirmacao_concluida=False):
+    """Renderiza o formulário de registro e retorna os dados preenchidos."""
+    status_atual = str(tarefa.get("status", STATUS_NAO_INICIADA))
+
+    if mostrar_confirmacao_concluida:
+        render_html("""
+            <div class="rule-warning">
+              ⚠️ <strong>Atenção:</strong> Esta tarefa já está <strong>Concluída</strong>.
+              Alterar seus dados pode modificar o histórico de estudos.
+              Confirme abaixo para prosseguir.
+            </div>
         """)
+
+    with st.form(f"form_{prefixo}_{tarefa['tarefa_id']}"):
+        col1, col2, col3, col4 = st.columns(4)
+        novo_status = col1.selectbox(
+            "Status",
+            STATUS_VALIDOS,
+            index=STATUS_VALIDOS.index(status_atual),
+            format_func=lambda v: STATUS_LABELS[v],
+        )
+        tipo_idx = TIPOS_ESTUDO.index(tarefa["tipo"]) if tarefa["tipo"] in TIPOS_ESTUDO else TIPOS_ESTUDO.index("Outro")
+        tipo_estudo  = col2.selectbox("Tipo de estudo", TIPOS_ESTUDO, index=tipo_idx)
+        data_estudo  = col3.date_input("Data do estudo", value=date.today())
+        ch           = col4.number_input("Tempo gasto (h)", min_value=0.0, value=float(tarefa["ch_efetiva"] or 0), step=0.25)
+        questoes     = st.number_input("Questões feitas", min_value=0, value=int(tarefa["qtd_questoes_feitas"] or 0), step=1)
+        acertos      = st.number_input("Acertos", min_value=0, value=int(tarefa["qtd_acertos"] or 0), step=1)
+        comentario   = st.text_area("Observações", value=tarefa["comentario"] or "")
+
+        if mostrar_confirmacao_concluida:
+            confirmado = st.checkbox("✅ Confirmo que desejo alterar uma tarefa já concluída")
+        else:
+            confirmado = True
+
+        salvar = st.form_submit_button("Registrar atividade", use_container_width=True, type="primary")
+
+    return salvar, novo_status, tipo_estudo, data_estudo, ch, questoes, acertos, comentario, confirmado
+
+
+def _renderizar_secao_registro(tarefas_df, aluno_id, status_alvo, titulo, key_prefix):
+    """Renderiza uma seção de registro para um grupo de tarefas (por status)."""
+    grupo = tarefas_df[tarefas_df["status"] == status_alvo].copy()
+    if grupo.empty:
+        st.info(f"Nenhuma tarefa {STATUS_LABELS[status_alvo].lower()}.")
+        return
+
+    opcoes = grupo["tarefa_id"].tolist()
+    tarefa_id = st.selectbox(
+        f"Tarefa {STATUS_LABELS[status_alvo].lower()}",
+        opcoes,
+        format_func=lambda v: _label_tarefa(grupo[grupo["tarefa_id"] == v].iloc[0]),
+        key=f"{key_prefix}_sel",
+    )
+    tarefa = grupo[grupo["tarefa_id"] == tarefa_id].iloc[0]
+
+    # Exibe detalhes da tarefa selecionada
+    st.dataframe(
+        pd.DataFrame([{
+            "Disciplina": tarefa["disciplina"],
+            "Aula": tarefa["aula"],
+            "Assunto": tarefa["assunto"],
+            "Tipo": tarefa["tipo"],
+            "Conteúdo": tarefa["conteudo"],
+            "Exercícios previstos": tarefa["qtd_exercicios_previstos"],
+        }]),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    eh_concluida = (status_alvo == STATUS_CONCLUIDA)
+
+    salvar, novo_status, tipo_estudo, data_estudo, ch, questoes, acertos, comentario, confirmado = (
+        _formulario_registro(tarefa, prefixo=key_prefix, mostrar_confirmacao_concluida=eh_concluida)
+    )
+
+    if not salvar:
+        return
+
+    # Validação: acertos x questões
+    if acertos > questoes:
+        st.error("Acertos não podem ser maiores que questões feitas.")
+        return
+
+    # Validação: tarefa concluída exige confirmação
+    if eh_concluida and not confirmado:
+        render_html('<div class="rule-error">Marque a confirmação para alterar uma tarefa já concluída.</div>')
+        return
+
+    # Validação: regra de andamento por disciplina
+    pode, msg_erro = _verificar_regra_andamento(tarefas_df, tarefa, novo_status, int(tarefa["disciplina_id"]))
+    if not pode:
+        render_html(f'<div class="rule-error">{escape_html(msg_erro)}</div>')
+        return
+
+    with conectar() as conn:
+        upsert_execucao(conn, aluno_id, int(tarefa_id), str(data_estudo), ch, None, 0, acertos, comentario, questoes, novo_status, tipo_estudo)
+    limpar_cache()
+    st.success("Atividade registrada com sucesso.")
+    st.rerun()
 
 
 def tela_registro_rapido():
-    st.header("Registro rápido")
+    render_html('<div class="hero"><h1>Registro Rápido</h1><p>Registre o progresso de uma tarefa de forma ágil.</p></div>')
+
     usuario = aluno_logado()
-    alunos = alunos_ativos()
+    alunos  = alunos_ativos()
+
     if usuario["perfil"] == "Aluno":
         aluno_id = int(usuario["id"])
         st.text_input("Aluno", value=usuario["nome"], disabled=True)
@@ -1790,106 +1889,61 @@ def tela_registro_rapido():
         aluno_id = st.selectbox(
             "Aluno",
             alunos["id"].tolist(),
-            format_func=lambda valor: alunos.loc[alunos["id"] == valor, "nome"].iloc[0],
+            format_func=lambda v: alunos.loc[alunos["id"] == v, "nome"].iloc[0],
         )
 
     exibir_card_ultima(ultima_atividade(aluno_id))
+
     tarefas = carregar_visao_tarefas(aluno_id)
     if tarefas.empty:
         st.info("Cadastre tarefas para registrar estudos.")
         return
 
-    andamento = tarefas[tarefas["status"] == STATUS_EM_ANDAMENTO]
-    if not andamento.empty:
-        continuar = st.selectbox(
-            "Continuar atividade em andamento",
-            ["Selecionar outra"] + andamento["tarefa_id"].tolist(),
-            format_func=lambda valor: "Selecionar outra"
-            if valor == "Selecionar outra"
-            else f"Tarefa {int(andamento.loc[andamento['tarefa_id'] == valor, 'tarefa'].iloc[0])} - {andamento.loc[andamento['tarefa_id'] == valor, 'disciplina'].iloc[0]}",
-        )
-    else:
-        continuar = "Selecionar outra"
+    # Separação em três abas por status
+    aba_nao, aba_and, aba_conc = st.tabs([
+        f"🔘 Não iniciadas ({len(tarefas[tarefas['status'] == STATUS_NAO_INICIADA])})",
+        f"🟡 Em andamento ({len(tarefas[tarefas['status'] == STATUS_EM_ANDAMENTO])})",
+        f"🟢 Concluídas ({len(tarefas[tarefas['status'] == STATUS_CONCLUIDA])})",
+    ])
 
-    tarefa_default = continuar if continuar != "Selecionar outra" else tarefas["tarefa_id"].iloc[0]
-    tarefa_id = st.selectbox(
-        "Atividade",
-        tarefas["tarefa_id"].tolist(),
-        index=tarefas["tarefa_id"].tolist().index(tarefa_default),
-        format_func=lambda valor: (
-            f"Tarefa {int(tarefas.loc[tarefas['tarefa_id'] == valor, 'tarefa'].iloc[0])} - "
-            f"{tarefas.loc[tarefas['tarefa_id'] == valor, 'disciplina'].iloc[0]}"
-        ),
-    )
-    tarefa = tarefas.loc[tarefas["tarefa_id"] == tarefa_id].iloc[0]
-    render_html('<div class="section-title">Conteúdo previsto</div>')
-    st.dataframe(
-        pd.DataFrame(
-            [
-                {
-                    "Disciplina": tarefa["disciplina"],
-                    "Aula": tarefa["aula"],
-                    "Assunto": tarefa["assunto"],
-                    "Tipo": tarefa["tipo"],
-                    "Conteúdo": tarefa["conteudo"],
-                    "Exercícios previstos": tarefa["qtd_exercicios_previstos"],
-                }
-            ]
-        ),
-        use_container_width=True,
-        hide_index=True,
-        row_height=88,
-    )
+    with aba_nao:
+        st.caption("Uma tarefa não iniciada só pode ser iniciada se não houver outra tarefa em andamento para a mesma disciplina.")
+        _renderizar_secao_registro(tarefas, aluno_id, STATUS_NAO_INICIADA, "Não iniciadas", "rr_nao")
 
-    with st.form("registro_rapido"):
-        col1, col2, col3, col4 = st.columns(4)
-        status = col1.selectbox("Status", STATUS_VALIDOS, index=STATUS_VALIDOS.index(tarefa["status"]), format_func=lambda v: STATUS_LABELS[v])
-        tipo_estudo = col2.selectbox("Tipo de estudo", TIPOS_ESTUDO, index=TIPOS_ESTUDO.index(tarefa["tipo"]) if tarefa["tipo"] in TIPOS_ESTUDO else TIPOS_ESTUDO.index("Outro"))
-        data_execucao = col3.date_input("Data do estudo", value=date.today())
-        ch = col4.number_input("Tempo gasto", min_value=0.0, value=float(tarefa["ch_efetiva"] or 0), step=0.25)
-        questoes = st.number_input("Questões feitas", min_value=0, value=int(tarefa["qtd_questoes_feitas"] or 0), step=1)
-        acertos = st.number_input("Acertos", min_value=0, value=int(tarefa["qtd_acertos"] or 0), step=1)
-        comentario = st.text_area("Observações", value=tarefa["comentario"] or "")
-        salvar = st.form_submit_button("Registrar atividade", use_container_width=True)
+    with aba_and:
+        _renderizar_secao_registro(tarefas, aluno_id, STATUS_EM_ANDAMENTO, "Em andamento", "rr_and")
 
-    if salvar:
-        if acertos > questoes:
-            st.error("Acertos não podem ser maiores que questões feitas.")
-            return
-        with conectar() as conn:
-            upsert_execucao(conn, aluno_id, int(tarefa_id), str(data_execucao), ch, None, 0, acertos, comentario, questoes, status, tipo_estudo)
-        limpar_cache()
-        st.success("Atividade registrada.")
-        st.rerun()
+    with aba_conc:
+        st.caption("⚠️ Alterações em tarefas concluídas exigem confirmação e podem modificar dados históricos.")
+        _renderizar_secao_registro(tarefas, aluno_id, STATUS_CONCLUIDA, "Concluídas", "rr_conc")
 
+    # Histórico recente
     recentes = carregar_execucoes()
     recentes = recentes[recentes["aluno_id"] == aluno_id].head(10)
     if not recentes.empty:
+        st.markdown("---")
         st.subheader("Histórico recente")
-        st.dataframe(
-            preparar_tabela(recentes)[["tarefa", "disciplina", "assunto", "tipo", "status_label", "data_execucao", "ch_efetiva", "comentario"]],
-            use_container_width=True,
-            hide_index=True,
-            row_height=72,
-        )
+        colunas = ["tarefa", "disciplina", "assunto", "tipo", "status_label", "data_execucao", "ch_efetiva", "comentario"]
+        tabela = preparar_tabela(recentes)
+        st.dataframe(tabela[[c for c in colunas if c in tabela.columns]], use_container_width=True, hide_index=True, row_height=72)
 
 
-# =====================================================
-# CRUD TAREFAS
-# =====================================================
-
+# ─────────────────────────────────────────────
+# TELA: TAREFAS (CRUD)
+# ─────────────────────────────────────────────
 
 def tela_tarefas():
     st.header("Gestão de tarefas educacionais")
-    usuario = aluno_logado()
-    alunos = alunos_ativos()
+    usuario    = aluno_logado()
+    alunos     = alunos_ativos()
     disciplinas = disciplinas_ativas()
-    aulas = carregar_aulas()
-    assuntos = carregar_assuntos()
-    tarefas = carregar_tarefas_base()
+    aulas      = carregar_aulas()
+    assuntos   = carregar_assuntos()
+    tarefas    = carregar_tarefas_base()
 
     abas = st.tabs(["Execução e status", "Criar tarefa", "Editar tarefas", "Vincular alunos"])
 
+    # ── Aba 1: Execução e status ──
     with abas[0]:
         if usuario["perfil"] == "Aluno":
             aluno_id = int(usuario["id"])
@@ -1899,47 +1953,29 @@ def tela_tarefas():
                 st.info("Cadastre um aluno.")
                 return
             aluno_id = st.selectbox(
-                "Aluno",
-                alunos["id"].tolist(),
-                format_func=lambda valor: alunos.loc[alunos["id"] == valor, "nome"].iloc[0],
+                "Aluno", alunos["id"].tolist(),
+                format_func=lambda v: alunos.loc[alunos["id"] == v, "nome"].iloc[0],
             )
         df = carregar_visao_tarefas(aluno_id)
         col1, col2, col3 = st.columns(3)
-        disciplina = col1.multiselect("Disciplina", sorted(df["disciplina"].dropna().unique().tolist()))
-        tipo = col2.multiselect("Tipo de estudo", sorted(df["tipo"].dropna().unique().tolist()))
-        status_f = col3.multiselect("Status", STATUS_VALIDOS, default=STATUS_VALIDOS, format_func=lambda v: STATUS_LABELS[v])
+        disciplina_f = col1.multiselect("Disciplina", sorted(df["disciplina"].dropna().unique().tolist()))
+        tipo_f       = col2.multiselect("Tipo de estudo", sorted(df["tipo"].dropna().unique().tolist()))
+        status_f     = col3.multiselect("Status", STATUS_VALIDOS, default=STATUS_VALIDOS, format_func=lambda v: STATUS_LABELS[v])
         filtrado = df.copy()
-        if disciplina:
-            filtrado = filtrado[filtrado["disciplina"].isin(disciplina)]
-        if tipo:
-            filtrado = filtrado[filtrado["tipo"].isin(tipo)]
-        if status_f:
-            filtrado = filtrado[filtrado["status"].isin(status_f)]
+        if disciplina_f: filtrado = filtrado[filtrado["disciplina"].isin(disciplina_f)]
+        if tipo_f:       filtrado = filtrado[filtrado["tipo"].isin(tipo_f)]
+        if status_f:     filtrado = filtrado[filtrado["status"].isin(status_f)]
 
-        editor = filtrado[
-            [
-                "tarefa_id",
-                "tarefa",
-                "disciplina",
-                "aula",
-                "assunto",
-                "tipo",
-                "status",
-                "data_execucao",
-                "ch_efetiva",
-                "qtd_questoes_feitas",
-                "qtd_acertos",
-                "desempenho",
-                "comentario",
-            ]
-        ].copy()
+        colunas_editor = ["tarefa_id", "tarefa", "disciplina", "aula", "assunto", "tipo", "status",
+                          "data_execucao", "ch_efetiva", "qtd_questoes_feitas", "qtd_acertos", "desempenho", "comentario"]
+        editor = filtrado[[c for c in colunas_editor if c in filtrado.columns]].copy()
         editor["data_execucao"] = editor["data_execucao"].fillna("")
         editado = st.data_editor(
             editor,
             use_container_width=True,
             hide_index=True,
             row_height=72,
-        disabled=["tarefa_id", "tarefa", "disciplina", "aula", "assunto", "desempenho"],
+            disabled=["tarefa_id", "tarefa", "disciplina", "aula", "assunto", "desempenho"],
             column_config={
                 "tarefa_id": None,
                 "tarefa": "Tarefa",
@@ -1960,18 +1996,13 @@ def tela_tarefas():
                         if converter_inteiro(row["qtd_acertos"]) > converter_inteiro(row["qtd_questoes_feitas"]):
                             raise ValueError(f"Tarefa {row['tarefa']}: acertos maiores que questões.")
                         upsert_execucao(
-                            conn,
-                            aluno_id,
-                            int(row["tarefa_id"]),
+                            conn, aluno_id, int(row["tarefa_id"]),
                             converter_data(row["data_execucao"]),
-                            converter_horas(row["ch_efetiva"]),
-                            None,
-                            0,
+                            converter_horas(row["ch_efetiva"]), None, 0,
                             converter_inteiro(row["qtd_acertos"]),
                             limpar_texto(row["comentario"]),
                             converter_inteiro(row["qtd_questoes_feitas"]),
-                            row["status"],
-                            row["tipo"],
+                            row["status"], row["tipo"],
                         )
                 limpar_cache()
                 st.success("Status e registros atualizados.")
@@ -1979,6 +2010,7 @@ def tela_tarefas():
             except Exception as exc:
                 erro_usuario("Não foi possível salvar.", exc)
 
+    # ── Aba 2: Criar tarefa ──
     with abas[1]:
         if usuario["perfil"] != "Gestor":
             st.info("Somente gestores podem criar tarefas.")
@@ -1987,52 +2019,47 @@ def tela_tarefas():
         else:
             with st.form("nova_tarefa", clear_on_submit=True):
                 col1, col2, col3 = st.columns(3)
-                numero = col1.number_input("Número da tarefa", min_value=1, step=1)
-                trilha = col2.number_input("Trilha", min_value=0, step=1)
+                numero       = col1.number_input("Número da tarefa", min_value=1, step=1)
+                trilha       = col2.number_input("Trilha", min_value=0, step=1)
                 disciplina_id = col3.selectbox("Disciplina", disciplinas["id"].tolist(), format_func=lambda v: disciplinas.loc[disciplinas["id"] == v, "nome"].iloc[0])
-                aulas_disc = aulas[aulas["disciplina_id"] == disciplina_id]
-                aula_id = st.selectbox("Aula", aulas_disc["id"].tolist(), format_func=lambda v: aulas_disc.loc[aulas_disc["id"] == v, "aula"].iloc[0]) if not aulas_disc.empty else None
+                aulas_disc   = aulas[aulas["disciplina_id"] == disciplina_id]
+                aula_id      = st.selectbox("Aula", aulas_disc["id"].tolist(), format_func=lambda v: aulas_disc.loc[aulas_disc["id"] == v, "aula"].iloc[0]) if not aulas_disc.empty else None
                 assuntos_aula = assuntos[assuntos["aula_id"] == aula_id] if aula_id else assuntos.iloc[0:0]
-                assunto_id = st.selectbox("Assunto", assuntos_aula["id"].tolist(), format_func=lambda v: assuntos_aula.loc[assuntos_aula["id"] == v, "assunto"].iloc[0]) if not assuntos_aula.empty else None
-                col4, col5 = st.columns(2)
-                tipo = col4.selectbox("Tipo de estudo", TIPOS_ESTUDO)
-                previstos = col5.number_input("Exercícios previstos", min_value=0, step=1)
-                conteudo = st.text_area("Conteúdo")
-                alunos_vinculados = st.multiselect("Vincular alunos", alunos["id"].tolist(), format_func=lambda v: alunos.loc[alunos["id"] == v, "nome"].iloc[0])
-                salvar = st.form_submit_button("Criar tarefa", use_container_width=True)
+                assunto_id   = st.selectbox("Assunto", assuntos_aula["id"].tolist(), format_func=lambda v: assuntos_aula.loc[assuntos_aula["id"] == v, "assunto"].iloc[0]) if not assuntos_aula.empty else None
+                col4, col5   = st.columns(2)
+                tipo         = col4.selectbox("Tipo de estudo", TIPOS_ESTUDO)
+                previstos    = col5.number_input("Exercícios previstos", min_value=0, step=1)
+                conteudo     = st.text_area("Conteúdo")
+                alunos_vinc  = st.multiselect("Vincular alunos", alunos["id"].tolist(), format_func=lambda v: alunos.loc[alunos["id"] == v, "nome"].iloc[0])
+                salvar       = st.form_submit_button("Criar tarefa", use_container_width=True)
             if salvar:
                 try:
                     aula_nome = aulas.loc[aulas["id"] == aula_id, "aula"].iloc[0] if aula_id else "Aula não informada"
                     with conectar() as conn:
                         conn.execute(
-                            """
-                            INSERT INTO tarefas
-                            (numero, trilha, disciplina_id, aula_id, assunto_id, aula, qtd_exercicios_previstos, tipo, conteudo, ativo)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
-                            """,
+                            "INSERT INTO tarefas (numero, trilha, disciplina_id, aula_id, assunto_id, aula, qtd_exercicios_previstos, tipo, conteudo, ativo) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)",
                             (int(numero), int(trilha), int(disciplina_id), aula_id, assunto_id, aula_nome, int(previstos), tipo, limpar_texto(conteudo)),
                         )
                         tarefa_id = ultimo_id(conn)
-                        for aluno_id in alunos_vinculados:
-                            upsert_execucao(conn, int(aluno_id), tarefa_id, None, 0, None, 0, 0, None, 0, STATUS_NAO_INICIADA)
+                        for av in alunos_vinc:
+                            upsert_execucao(conn, int(av), tarefa_id, None, 0, None, 0, 0, None, 0, STATUS_NAO_INICIADA)
                     limpar_cache()
                     st.success("Tarefa criada.")
                     st.rerun()
                 except (IntegrityError, UniqueViolation):
                     st.error("Já existe uma tarefa com esse número.")
 
+    # ── Aba 3: Editar tarefas ──
     with abas[2]:
         if usuario["perfil"] != "Gestor":
             st.info("Somente gestores podem editar tarefas.")
         elif tarefas.empty:
             st.info("Nenhuma tarefa cadastrada.")
         else:
-            edit = tarefas[["tarefa_id", "tarefa", "trilha", "disciplina", "aula", "assunto", "tipo", "qtd_exercicios_previstos", "conteudo"]].copy()
+            colunas_edit = ["tarefa_id", "tarefa", "trilha", "disciplina", "aula", "assunto", "tipo", "qtd_exercicios_previstos", "conteudo"]
+            edit    = tarefas[[c for c in colunas_edit if c in tarefas.columns]].copy()
             editado = st.data_editor(
-                edit,
-                use_container_width=True,
-                hide_index=True,
-                row_height=72,
+                edit, use_container_width=True, hide_index=True, row_height=72,
                 disabled=["tarefa_id", "disciplina", "aula", "assunto"],
                 column_config={
                     "tarefa_id": None,
@@ -2042,24 +2069,13 @@ def tela_tarefas():
                 },
                 key="editor_tarefas_crud",
             )
-            col1, col2 = st.columns([1, 1])
+            col1, col2 = st.columns(2)
             if col1.button("Salvar tarefas", type="primary"):
                 with conectar() as conn:
                     for _, row in editado.iterrows():
                         conn.execute(
-                            """
-                            UPDATE tarefas
-                            SET numero = ?, trilha = ?, tipo = ?, qtd_exercicios_previstos = ?, conteudo = ?
-                            WHERE id = ?
-                            """,
-                            (
-                                int(row["tarefa"]),
-                                converter_inteiro(row["trilha"]),
-                                row["tipo"],
-                                converter_inteiro(row["qtd_exercicios_previstos"]),
-                                limpar_texto(row["conteudo"]),
-                                int(row["tarefa_id"]),
-                            ),
+                            "UPDATE tarefas SET numero = ?, trilha = ?, tipo = ?, qtd_exercicios_previstos = ?, conteudo = ? WHERE id = ?",
+                            (int(row["tarefa"]), converter_inteiro(row["trilha"]), row["tipo"], converter_inteiro(row["qtd_exercicios_previstos"]), limpar_texto(row["conteudo"]), int(row["tarefa_id"])),
                         )
                 limpar_cache()
                 st.success("Tarefas atualizadas.")
@@ -2071,44 +2087,47 @@ def tela_tarefas():
                 st.success("Tarefa excluída.")
                 st.rerun()
 
+    # ── Aba 4: Vincular alunos ──
     with abas[3]:
         if usuario["perfil"] != "Gestor":
             st.info("Somente gestores podem vincular alunos.")
         elif tarefas.empty or alunos.empty:
             st.info("Cadastre alunos e tarefas.")
         else:
-            tarefa_id = st.selectbox("Tarefa", tarefas["tarefa_id"].tolist(), format_func=lambda v: f"Tarefa {int(tarefas.loc[tarefas['tarefa_id'] == v, 'tarefa'].iloc[0])} - {tarefas.loc[tarefas['tarefa_id'] == v, 'disciplina'].iloc[0]}")
+            tarefa_id = st.selectbox(
+                "Tarefa", tarefas["tarefa_id"].tolist(),
+                format_func=lambda v: f"Tarefa {int(tarefas.loc[tarefas['tarefa_id'] == v, 'tarefa'].iloc[0])} - {tarefas.loc[tarefas['tarefa_id'] == v, 'disciplina'].iloc[0]}",
+            )
             vincular = st.multiselect("Alunos", alunos["id"].tolist(), format_func=lambda v: alunos.loc[alunos["id"] == v, "nome"].iloc[0])
             if st.button("Vincular alunos à tarefa", type="primary"):
                 with conectar() as conn:
-                    for aluno_id in vincular:
-                        upsert_execucao(conn, int(aluno_id), int(tarefa_id), None, 0, None, 0, 0, None, 0, STATUS_NAO_INICIADA)
+                    for av in vincular:
+                        upsert_execucao(conn, int(av), int(tarefa_id), None, 0, None, 0, 0, None, 0, STATUS_NAO_INICIADA)
                 limpar_cache()
                 st.success("Vínculos atualizados.")
                 st.rerun()
 
 
-# =====================================================
-# CRUD AULAS E ASSUNTOS
-# =====================================================
-
+# ─────────────────────────────────────────────
+# TELA: AULAS E ASSUNTOS
+# ─────────────────────────────────────────────
 
 def tela_aulas():
     st.header("Aulas e assuntos")
-    usuario = aluno_logado()
+    usuario     = aluno_logado()
     disciplinas = disciplinas_ativas()
-    aulas = carregar_aulas()
-    assuntos = carregar_assuntos()
-    abas = st.tabs(["Aulas", "Assuntos"])
+    aulas       = carregar_aulas()
+    assuntos    = carregar_assuntos()
+    abas        = st.tabs(["Aulas", "Assuntos"])
 
     with abas[0]:
         if usuario["perfil"] == "Gestor" and not disciplinas.empty:
             with st.form("nova_aula", clear_on_submit=True):
                 col1, col2, col3 = st.columns(3)
                 disciplina_id = col1.selectbox("Disciplina", disciplinas["id"].tolist(), format_func=lambda v: disciplinas.loc[disciplinas["id"] == v, "nome"].iloc[0])
-                aula = col2.text_input("Nome da aula")
-                tipo_estudo = col3.selectbox("Tipo de estudo", TIPOS_ESTUDO)
-                salvar = st.form_submit_button("Criar aula")
+                aula          = col2.text_input("Nome da aula")
+                tipo_estudo   = col3.selectbox("Tipo de estudo", TIPOS_ESTUDO)
+                salvar        = st.form_submit_button("Criar aula")
             if salvar:
                 if not limpar_texto(aula):
                     st.error("Informe o nome da aula.")
@@ -2118,13 +2137,12 @@ def tela_aulas():
                     limpar_cache()
                     st.success("Aula criada.")
                     st.rerun()
+
         if aulas.empty:
             st.info("Nenhuma aula cadastrada.")
         else:
             editado = st.data_editor(
-                aulas,
-                use_container_width=True,
-                hide_index=True,
+                aulas, use_container_width=True, hide_index=True,
                 disabled=["id", "disciplina_id", "disciplina"],
                 column_config={"tipo_estudo": st.column_config.SelectboxColumn("Tipo de estudo", options=TIPOS_ESTUDO)},
                 key="editor_aulas",
@@ -2136,13 +2154,7 @@ def tela_aulas():
                         for _, row in editado.iterrows():
                             conn.execute(
                                 "UPDATE aulas SET aula = ?, tipo_estudo = ?, estudada_padrao = ?, revisao_24h_padrao = ? WHERE id = ?",
-                                (
-                                    limpar_texto(row["aula"]),
-                                    normalizar_tipo_estudo(row["tipo_estudo"]),
-                                    limpar_texto(row["estudada_padrao"]),
-                                    limpar_texto(row["revisao_24h_padrao"]),
-                                    int(row["id"]),
-                                ),
+                                (limpar_texto(row["aula"]), normalizar_tipo_estudo(row["tipo_estudo"]), limpar_texto(row["estudada_padrao"]), limpar_texto(row["revisao_24h_padrao"]), int(row["id"])),
                             )
                     limpar_cache()
                     st.success("Aulas atualizadas.")
@@ -2157,7 +2169,10 @@ def tela_aulas():
     with abas[1]:
         if usuario["perfil"] == "Gestor" and not aulas.empty:
             with st.form("novo_assunto", clear_on_submit=True):
-                aula_id = st.selectbox("Aula", aulas["id"].tolist(), format_func=lambda v: f"{aulas.loc[aulas['id'] == v, 'disciplina'].iloc[0]} - {aulas.loc[aulas['id'] == v, 'aula'].iloc[0]}")
+                aula_id = st.selectbox(
+                    "Aula", aulas["id"].tolist(),
+                    format_func=lambda v: f"{aulas.loc[aulas['id'] == v, 'disciplina'].iloc[0]} — {aulas.loc[aulas['id'] == v, 'aula'].iloc[0]}",
+                )
                 titulo = st.text_input("Assunto")
                 salvar = st.form_submit_button("Criar assunto")
             if salvar:
@@ -2169,13 +2184,12 @@ def tela_aulas():
                     limpar_cache()
                     st.success("Assunto criado.")
                     st.rerun()
+
         if assuntos.empty:
             st.info("Nenhum assunto cadastrado.")
         else:
             editado = st.data_editor(
-                assuntos,
-                use_container_width=True,
-                hide_index=True,
+                assuntos, use_container_width=True, hide_index=True,
                 disabled=["id", "aula_id", "disciplina", "aula"],
                 key="editor_assuntos",
             )
@@ -2196,13 +2210,18 @@ def tela_aulas():
                     st.rerun()
 
 
+# ─────────────────────────────────────────────
+# TELA: DISCIPLINAS
+# ─────────────────────────────────────────────
+
 def tela_disciplinas():
     st.header("Disciplinas")
     usuario = aluno_logado()
-    df = disciplinas_ativas()
+    df      = disciplinas_ativas()
+
     if usuario["perfil"] == "Gestor":
         with st.form("nova_disciplina", clear_on_submit=True):
-            nome = st.text_input("Nome da disciplina")
+            nome   = st.text_input("Nome da disciplina")
             salvar = st.form_submit_button("Criar disciplina")
         if salvar:
             try:
@@ -2212,6 +2231,7 @@ def tela_disciplinas():
                 st.rerun()
             except (IntegrityError, UniqueViolation):
                 st.error("Já existe uma disciplina com esse nome.")
+
         if not df.empty:
             editado = st.data_editor(df, use_container_width=True, hide_index=True, disabled=["id"], key="editor_disciplinas")
             col1, col2 = st.columns(2)
@@ -2228,8 +2248,13 @@ def tela_disciplinas():
                 limpar_cache()
                 st.success("Disciplina excluída.")
                 st.rerun()
+
     st.dataframe(df, use_container_width=True, hide_index=True)
 
+
+# ─────────────────────────────────────────────
+# TELA: ALUNOS
+# ─────────────────────────────────────────────
 
 def tela_alunos():
     st.header("Alunos")
@@ -2237,13 +2262,14 @@ def tela_alunos():
     if usuario["perfil"] != "Gestor":
         st.info("Somente gestores podem administrar alunos.")
         return
+
     with st.form("novo_aluno", clear_on_submit=True):
         col1, col2 = st.columns(2)
-        nome = col1.text_input("Nome")
-        email = col2.text_input("E-mail")
+        nome   = col1.text_input("Nome")
+        email  = col2.text_input("E-mail")
         salvar = st.form_submit_button("Adicionar aluno")
     if salvar:
-        nome = limpar_texto(nome)
+        nome  = limpar_texto(nome)
         email = normalizar_email(email) or email_local(nome)
         if not nome:
             st.error("Informe o nome.")
@@ -2263,6 +2289,7 @@ def tela_alunos():
     if alunos.empty:
         st.info("Nenhum aluno cadastrado.")
         return
+
     editado = st.data_editor(alunos, use_container_width=True, hide_index=True, disabled=["id", "perfil"], key="editor_alunos")
     col1, col2 = st.columns(2)
     if col1.button("Salvar alterações de alunos", type="primary"):
@@ -2278,13 +2305,20 @@ def tela_alunos():
             st.rerun()
         except (IntegrityError, UniqueViolation):
             st.error("Nome ou e-mail duplicado.")
-    excluir_id = col2.selectbox("Excluir aluno", alunos["id"].tolist(), format_func=lambda valor: alunos.loc[alunos["id"] == valor, "nome"].iloc[0])
+    excluir_id = col2.selectbox(
+        "Excluir aluno", alunos["id"].tolist(),
+        format_func=lambda v: alunos.loc[alunos["id"] == v, "nome"].iloc[0],
+    )
     if col2.button("Excluir aluno selecionado"):
         executar("UPDATE alunos SET ativo = 0 WHERE id = ? AND perfil = 'Aluno'", (int(excluir_id),))
         limpar_cache()
         st.success("Aluno excluído.")
         st.rerun()
 
+
+# ─────────────────────────────────────────────
+# TELA: IMPORTAÇÕES
+# ─────────────────────────────────────────────
 
 def tela_importacao():
     st.header("Importações")
@@ -2315,6 +2349,10 @@ def tela_importacao():
             st.rerun()
 
 
+# ─────────────────────────────────────────────
+# TELA: CONFIGURAÇÕES
+# ─────────────────────────────────────────────
+
 def tela_configuracoes():
     st.header("Configurações")
     usuario = aluno_logado()
@@ -2322,10 +2360,10 @@ def tela_configuracoes():
 
     with aba_senha:
         with st.form("senha"):
-            atual = st.text_input("Senha atual", type="password")
-            nova = st.text_input("Nova senha", type="password")
+            atual     = st.text_input("Senha atual", type="password")
+            nova      = st.text_input("Nova senha", type="password")
             confirmar = st.text_input("Confirmar nova senha", type="password")
-            salvar = st.form_submit_button("Alterar senha")
+            salvar    = st.form_submit_button("Alterar senha")
         if salvar:
             usuario_db = consultar("SELECT senha FROM alunos WHERE id = ?", (usuario["id"],))
             if usuario_db.empty or not verificar_senha(atual, usuario_db.iloc[0]["senha"]):
@@ -2346,13 +2384,12 @@ def tela_configuracoes():
             st.dataframe(usuarios, use_container_width=True, hide_index=True)
             if not usuarios.empty:
                 usuario_id = st.selectbox(
-                    "Usuário",
-                    usuarios["id"].tolist(),
+                    "Usuário", usuarios["id"].tolist(),
                     format_func=lambda v: f"{usuarios.loc[usuarios['id'] == v, 'nome'].iloc[0]} ({usuarios.loc[usuarios['id'] == v, 'perfil'].iloc[0]})",
                 )
                 col1, col2, col3 = st.columns(3)
                 nova_senha = col1.text_input("Nova senha temporária", type="password")
-                forcar = col2.checkbox("Forçar troca no próximo login", value=True)
+                forcar     = col2.checkbox("Forçar troca no próximo login", value=True)
                 if col3.button("Redefinir senha", type="primary"):
                     if not senha_valida(nova_senha):
                         st.error("A senha temporária deve ter pelo menos 8 caracteres, contendo letras e números.")
@@ -2375,7 +2412,7 @@ def tela_configuracoes():
         if usuario["perfil"] != "Gestor":
             st.info("Somente gestores podem exportar backups.")
         else:
-            st.caption("Exportação lógica para backup e auditoria. Em PostgreSQL, use também `pg_dump` conforme o README_DEPLOY.")
+            st.caption("Exportação lógica para backup e auditoria.")
             tabelas = {
                 "alunos": consultar("SELECT id, nome, email, perfil, ativo, force_troca_senha FROM alunos"),
                 "disciplinas": consultar("SELECT * FROM disciplinas"),
@@ -2384,20 +2421,19 @@ def tela_configuracoes():
                 "tarefas": consultar("SELECT * FROM tarefas"),
                 "execucoes": consultar("SELECT * FROM execucoes"),
             }
-            for nome, dados in tabelas.items():
+            for nome_tab, dados in tabelas.items():
                 st.download_button(
-                    f"Exportar {nome}.csv",
+                    f"Exportar {nome_tab}.csv",
                     data=dados.to_csv(index=False).encode("utf-8"),
-                    file_name=f"{nome}_{date.today()}.csv",
+                    file_name=f"{nome_tab}_{date.today()}.csv",
                     mime="text/csv",
                     use_container_width=True,
                 )
 
 
-# =====================================================
-# INICIALIZAÇÃO
-# =====================================================
-
+# ─────────────────────────────────────────────
+# INICIALIZAÇÃO E MAIN
+# ─────────────────────────────────────────────
 
 def inicializar():
     criar_tabelas()
@@ -2409,6 +2445,7 @@ def inicializar():
 
 def main():
     inicializar()
+
     if "usuario" not in st.session_state:
         tela_login()
         return
@@ -2426,28 +2463,20 @@ def main():
         st.rerun()
 
     if usuario["perfil"] == "Gestor":
-        opcoes = [
-            "Dashboard",
-            "Registro rápido",
-            "Tarefas",
-            "Aulas e assuntos",
-            "Disciplinas",
-            "Alunos",
-            "Importações",
-            "Configurações",
-        ]
+        opcoes = ["Dashboard", "Registro rápido", "Tarefas", "Aulas e assuntos", "Disciplinas", "Alunos", "Importações", "Configurações"]
     else:
         opcoes = ["Dashboard", "Registro rápido", "Tarefas", "Aulas e assuntos", "Configurações"]
+
     opcao = st.sidebar.radio("Navegação", opcoes)
     paginas = {
-        "Dashboard": dashboard,
+        "Dashboard":       dashboard,
         "Registro rápido": tela_registro_rapido,
-        "Tarefas": tela_tarefas,
-        "Aulas e assuntos": tela_aulas,
-        "Disciplinas": tela_disciplinas,
-        "Alunos": tela_alunos,
-        "Importações": tela_importacao,
-        "Configurações": tela_configuracoes,
+        "Tarefas":         tela_tarefas,
+        "Aulas e assuntos":tela_aulas,
+        "Disciplinas":     tela_disciplinas,
+        "Alunos":          tela_alunos,
+        "Importações":     tela_importacao,
+        "Configurações":   tela_configuracoes,
     }
     paginas[opcao]()
 
