@@ -2296,15 +2296,38 @@ def _renderizar_secao_registro(tarefas_df: pd.DataFrame, aluno_id: int, status_a
     tipo_atual   = str(tarefa.get("tipo") or "Outro")
     tipo_idx     = TIPOS_ESTUDO.index(tipo_atual) if tipo_atual in TIPOS_ESTUDO else TIPOS_ESTUDO.index("Outro")
 
+    # Converte data com segurança — NaT, None e strings inválidas → date.today()
     data_atual = date.today()
-    if tarefa.get("data_execucao"):
+    raw_data   = tarefa.get("data_execucao")
+    if raw_data is not None:
         try:
-            data_atual = pd.to_datetime(tarefa["data_execucao"]).date()
+            parsed = pd.to_datetime(raw_data)
+            if parsed is not pd.NaT and not pd.isnull(parsed):
+                data_atual = parsed.date()
         except Exception:
             pass
 
+    # Converte numéricos com segurança
+    def _safe_float(v, padrao=0.0):
+        try:
+            f = float(v)
+            return padrao if (f != f or f is None) else f  # NaN check
+        except (TypeError, ValueError):
+            return padrao
+
+    def _safe_int(v, padrao=0):
+        try:
+            return int(round(float(v)))
+        except (TypeError, ValueError):
+            return padrao
+
+    ch_atual       = _safe_float(tarefa.get("ch_efetiva"), 0.0)
+    questoes_atual = _safe_int(tarefa.get("qtd_questoes_feitas"), 0)
+    acertos_atual  = _safe_int(tarefa.get("qtd_acertos"), 0)
+    comentario_atual = str(tarefa.get("comentario") or "")
+
     # ── Formulário pré-preenchido ──
-    with st.form(f"form_{key_prefix}_{tarefa_id}", border=True):
+    with st.form(f"form_{key_prefix}_{tarefa_id}"):
         col1, col2, col3, col4 = st.columns(4)
         novo_status = col1.selectbox(
             "Status",
@@ -2324,7 +2347,7 @@ def _renderizar_secao_registro(tarefas_df: pd.DataFrame, aluno_id: int, status_a
         ch = col4.number_input(
             "Tempo gasto (h)",
             min_value=0.0,
-            value=float(tarefa.get("ch_efetiva") or 0),
+            value=ch_atual,
             step=0.25,
             format="%.2f",
         )
@@ -2333,19 +2356,19 @@ def _renderizar_secao_registro(tarefas_df: pd.DataFrame, aluno_id: int, status_a
         questoes = col5.number_input(
             "Questões feitas",
             min_value=0,
-            value=int(tarefa.get("qtd_questoes_feitas") or 0),
+            value=questoes_atual,
             step=1,
         )
         acertos = col6.number_input(
             "Acertos",
             min_value=0,
-            value=int(tarefa.get("qtd_acertos") or 0),
+            value=acertos_atual,
             step=1,
         )
 
         comentario = st.text_area(
             "Observações",
-            value=str(tarefa.get("comentario") or ""),
+            value=comentario_atual,
             placeholder="Anotações sobre esta sessão de estudo (opcional)…",
         )
 
@@ -2396,7 +2419,7 @@ def _renderizar_secao_registro(tarefas_df: pd.DataFrame, aluno_id: int, status_a
         status_nov = STATUS_LABELS.get(novo_status, novo_status)
         mudou = status_atual != novo_status
         msg = (
-            f"✅ Registro salvo com sucesso! "
+            f"✅ Registro salvo! "
             f"Tarefa **{int(tarefa['tarefa'])}** — {tarefa['disciplina']}"
             + (f" · Status: **{status_ant} → {status_nov}**" if mudou else "")
             + f" · {ch:.2f}h · {acertos}/{questoes} acertos."
