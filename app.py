@@ -1,6 +1,6 @@
 """
-Sistema de Acompanhamento de Estudos
-Arquivo único — refatorado para legibilidade, layout e regras de negócio do Registro Rápido.
+Sistema de Acompanhamento de Estudos — versão evoluída.
+Dashboard analítico avançado, menu moderno, KPIs inteligentes, análise por IA e tooltips completos.
 """
 
 import hashlib
@@ -16,6 +16,7 @@ from pathlib import Path
 
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 
 try:
@@ -79,6 +80,23 @@ TIPOS_ESTUDO = [
     "Videoaula", "Resumo", "Flashcards", "Projeto", "Pesquisa", "Outro",
 ]
 
+# Paleta de cores
+COR_PRIMARIA = "#1e40af"
+COR_SUCESSO  = "#16a34a"
+COR_ALERTA   = "#d97706"
+COR_PERIGO   = "#dc2626"
+
+# Itens de menu com ícones (usados no menu lateral customizado)
+MENU_ITENS_GESTOR = [
+    ("📊", "Dashboard"), ("⚡", "Registro rápido"), ("📋", "Tarefas"),
+    ("📖", "Aulas e assuntos"), ("🎓", "Disciplinas"), ("👥", "Alunos"),
+    ("📥", "Importações"), ("⚙️", "Configurações"),
+]
+MENU_ITENS_ALUNO = [
+    ("📊", "Dashboard"), ("⚡", "Registro rápido"), ("📋", "Tarefas"),
+    ("📖", "Aulas e assuntos"), ("⚙️", "Configurações"),
+]
+
 st.set_page_config(
     page_title=APP_NAME,
     page_icon="📚",
@@ -87,156 +105,286 @@ st.set_page_config(
 )
 
 
-# ─────────────────────────────────────────────
-# CSS GLOBAL
-# ─────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════
+# CSS GLOBAL — menu moderno, dashboard analítico, tooltips
+# ═══════════════════════════════════════════════════════════
 
 CSS = """
 <style>
-  :root { color-scheme: light; }
+:root {
+  --c-bg:      #f1f5f9;
+  --c-sidebar: #0f172a;
+  --c-accent:  #3b82f6;
+  --c-text:    #0f172a;
+  --c-muted:   #64748b;
+  --c-border:  #e2e8f0;
+  --c-white:   #ffffff;
+  --c-ok:      #16a34a;
+  --c-warn:    #d97706;
+  --c-danger:  #dc2626;
+  color-scheme: light;
+}
 
-  /* Layout */
-  .block-container {
-    padding: 1.25rem 2rem 2rem;
-    max-width: 1480px;
-  }
+/* ══ LAYOUT ══ */
+.block-container { padding: 1rem 1.5rem 2rem; max-width: 1560px; }
+[data-testid="stAppViewContainer"] > .main { background: var(--c-bg); }
 
-  /* Sidebar */
-  [data-testid="stSidebar"] {
-    background: #0f172a;
-  }
-  [data-testid="stSidebar"] * { color: #f8fafc !important; }
-  [data-testid="stSidebar"] .stRadio label { padding: 6px 0; }
+/* ══ SIDEBAR — textos sempre visíveis, menu moderno ══ */
+[data-testid="stSidebar"] {
+  background: var(--c-sidebar) !important;
+  min-width: 240px !important;
+  max-width: 260px !important;
+}
+/* Labels de widgets na sidebar sempre visíveis */
+[data-testid="stSidebar"] label,
+[data-testid="stSidebar"] .stSelectbox label,
+[data-testid="stSidebar"] .stMultiSelect label,
+[data-testid="stSidebar"] .stDateInput label,
+[data-testid="stSidebar"] .stNumberInput label,
+[data-testid="stSidebar"] .stTextInput label,
+[data-testid="stSidebar"] .stToggle label,
+[data-testid="stSidebar"] p,
+[data-testid="stSidebar"] span {
+  color: #cbd5e1 !important;
+  opacity: 1 !important;
+  visibility: visible !important;
+}
+/* Títulos de seção na sidebar */
+[data-testid="stSidebar"] h3,
+[data-testid="stSidebar"] .stMarkdown h3 {
+  color: #94a3b8 !important;
+  font-size: .68rem !important;
+  font-weight: 800 !important;
+  letter-spacing: .12em !important;
+  text-transform: uppercase !important;
+  margin: 1.2rem 0 .4rem !important;
+  padding: 0 !important;
+}
+/* Radio buttons do menu — sempre visíveis */
+[data-testid="stSidebar"] .stRadio > div { gap: 2px !important; }
+[data-testid="stSidebar"] .stRadio label {
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  padding: 9px 14px !important;
+  border-radius: 8px !important;
+  margin: 1px 0 !important;
+  cursor: pointer !important;
+  color: #cbd5e1 !important;
+  font-size: .85rem !important;
+  font-weight: 500 !important;
+  opacity: 1 !important;
+  visibility: visible !important;
+  transition: background .15s, color .15s !important;
+}
+[data-testid="stSidebar"] .stRadio label:hover {
+  background: rgba(255,255,255,.08) !important;
+  color: #f1f5f9 !important;
+}
+[data-testid="stSidebar"] .stRadio label[data-testid="stWidgetLabel"] { display: none !important; }
+/* Oculta o círculo padrão do radio e usa highlight de fundo */
+[data-testid="stSidebar"] .stRadio input[type="radio"] { display: none !important; }
+[data-testid="stSidebar"] .stRadio input[type="radio"]:checked + div + label,
+[data-testid="stSidebar"] .stRadio input[type="radio"]:checked ~ label {
+  background: rgba(59,130,246,.25) !important;
+  color: #93c5fd !important;
+  font-weight: 700 !important;
+}
+/* Botões da sidebar */
+[data-testid="stSidebar"] .stButton > button {
+  background: rgba(255,255,255,.07) !important;
+  color: #e2e8f0 !important;
+  border: 1px solid rgba(255,255,255,.12) !important;
+  border-radius: 8px !important;
+  font-size: .82rem !important;
+  font-weight: 600 !important;
+  width: 100% !important;
+  text-align: left !important;
+  padding: 9px 14px !important;
+  margin-bottom: 3px !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  transition: background .15s !important;
+}
+[data-testid="stSidebar"] .stButton > button:hover {
+  background: rgba(255,255,255,.14) !important;
+  color: #f8fafc !important;
+}
+[data-testid="stSidebar"] .stButton > button p { color: inherit !important; font-size: .82rem !important; }
+/* Selectbox/inputs da sidebar */
+[data-testid="stSidebar"] .stSelectbox > div > div,
+[data-testid="stSidebar"] .stMultiSelect > div > div {
+  background: rgba(255,255,255,.07) !important;
+  border-color: rgba(255,255,255,.15) !important;
+  color: #e2e8f0 !important;
+}
+[data-testid="stSidebar"] .stTextInput input,
+[data-testid="stSidebar"] .stNumberInput input {
+  background: rgba(255,255,255,.07) !important;
+  border-color: rgba(255,255,255,.15) !important;
+  color: #e2e8f0 !important;
+}
+/* Cabeçalho do usuário na sidebar */
+.sidebar-user {
+  padding: 16px 14px 12px;
+  border-bottom: 1px solid rgba(255,255,255,.1);
+  margin-bottom: 8px;
+}
+.sidebar-user-name { color: #f1f5f9; font-size: .92rem; font-weight: 700; margin: 0; }
+.sidebar-user-role { color: #64748b; font-size: .72rem; margin: 2px 0 0; }
+.sidebar-nav-section {
+  padding: 6px 14px 2px;
+  color: #475569;
+  font-size: .66rem;
+  font-weight: 800;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+}
 
-  /* Métricas */
-  [data-testid="stMetric"] {
-    background: #ffffff;
-    border: 1px solid #e2e8f0;
-    border-radius: 10px;
-    padding: 14px 18px;
-    box-shadow: 0 1px 3px rgba(15,23,42,.05);
-  }
-  [data-testid="stMetricValue"] { font-size: 1.45rem; font-weight: 800; color: #0f172a; }
-  [data-testid="stMetricLabel"] { color: #475569; font-size: .85rem; }
+/* ══ MÉTRICAS NATIVAS ══ */
+[data-testid="stMetric"] {
+  background: var(--c-white);
+  border: 1px solid var(--c-border);
+  border-radius: 10px;
+  padding: 14px 16px;
+  box-shadow: 0 1px 3px rgba(15,23,42,.05);
+}
+[data-testid="stMetricValue"] { font-size: 1.4rem; font-weight: 800; color: var(--c-text); }
+[data-testid="stMetricLabel"] { color: var(--c-muted); font-size: .78rem; font-weight: 600; }
+[data-testid="stMetricDelta"] { font-size: .76rem !important; }
 
-  /* DataFrames */
-  div[data-testid="stDataFrame"] {
-    border: 1px solid #e2e8f0;
-    border-radius: 10px;
-    overflow: hidden;
-  }
+/* ══ DATAFRAMES ══ */
+div[data-testid="stDataFrame"] { border: 1px solid var(--c-border); border-radius: 10px; overflow: hidden; }
 
-  /* Hero banner */
-  .hero {
-    border: 1px solid #dbeafe;
-    background: linear-gradient(135deg, #eff6ff 0%, #f8fafc 50%, #ecfdf5 100%);
-    border-radius: 10px;
-    padding: 20px 24px;
-    margin-bottom: 16px;
-  }
-  .hero h1 { margin: 0 0 4px; font-size: 1.6rem; color: #0f172a; font-weight: 800; }
-  .hero p  { margin: 0; color: #475569; font-size: .95rem; }
+/* ══ HERO ══ */
+.hero {
+  background: linear-gradient(135deg,#eff6ff 0%,#f8fafc 50%,#ecfdf5 100%);
+  border: 1px solid #dbeafe; border-radius: 12px; padding: 18px 24px; margin-bottom: 16px;
+}
+.hero h1 { margin: 0 0 4px; font-size: 1.5rem; color: var(--c-text); font-weight: 800; }
+.hero p  { margin: 0; color: var(--c-muted); font-size: .88rem; }
 
-  /* Cards de atividade */
-  .quick-card {
-    border: 1px solid #cbd5e1;
-    border-left: 6px solid #94a3b8;
-    border-radius: 10px;
-    padding: 16px 20px;
-    background: #ffffff;
-    box-shadow: 0 4px 12px rgba(15,23,42,.06);
-    margin-bottom: 16px;
-  }
-  .quick-card.ok   { border-left-color: #22c55e; }
-  .quick-card.warn { border-left-color: #f59e0b; }
-  .quick-card.off  { border-left-color: #94a3b8; }
-  .quick-card h3   { margin: 4px 0 0; font-size: 1.05rem; color: #0f172a; }
+/* ══ CARDS DE ATIVIDADE ══ */
+.quick-card {
+  background: var(--c-white); border: 1px solid var(--c-border);
+  border-left: 5px solid #94a3b8; border-radius: 10px;
+  padding: 14px 18px; margin-bottom: 14px;
+  box-shadow: 0 2px 8px rgba(15,23,42,.05);
+}
+.quick-card.ok   { border-left-color: var(--c-ok); }
+.quick-card.warn { border-left-color: var(--c-warn); }
+.quick-card.off  { border-left-color: #94a3b8; }
+.quick-card h3   { margin: 4px 0 0; font-size: 1rem; }
+.quick-grid { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 8px; margin-top: 12px; }
+@media(max-width:900px){ .quick-grid{ grid-template-columns: repeat(2,1fr); } }
+@media(max-width:560px){ .quick-grid{ grid-template-columns: 1fr; } }
+.quick-item { background: #f8fafc; border: 1px solid var(--c-border); border-radius: 7px; padding: 8px 10px; }
+.quick-label { color: var(--c-muted); font-size: .66rem; font-weight: 800; text-transform: uppercase; letter-spacing: .06em; }
+.quick-value { color: var(--c-text); font-weight: 700; margin-top: 2px; font-size: .87rem; overflow-wrap: anywhere; }
 
-  /* Grid interna do card */
-  .quick-grid {
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 10px;
-    margin-top: 14px;
-  }
-  @media (max-width: 900px) { .quick-grid { grid-template-columns: repeat(2, 1fr); } }
-  @media (max-width: 560px) { .quick-grid { grid-template-columns: 1fr; } }
+/* ══ STATUS BADGES ══ */
+.status-ok, .status-warn, .status-off {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 3px 10px; border-radius: 999px; font-weight: 700; font-size: .77rem; margin-top: 4px;
+}
+.status-ok   { background: #dcfce7; color: #166534; }
+.status-warn { background: #fef3c7; color: #92400e; }
+.status-off  { background: #f1f5f9; color: #475569; }
 
-  .quick-item {
-    background: #f8fafc;
-    border: 1px solid #e2e8f0;
-    border-radius: 8px;
-    padding: 10px 12px;
-  }
-  .quick-label {
-    color: #64748b;
-    font-size: .72rem;
-    text-transform: uppercase;
-    font-weight: 800;
-    letter-spacing: .04em;
-  }
-  .quick-value {
-    color: #0f172a;
-    font-weight: 700;
-    margin-top: 3px;
-    overflow-wrap: anywhere;
-    font-size: .93rem;
-  }
+/* ══ KPI CARD CUSTOMIZADO com tooltip ══ */
+.kpi-card {
+  background: var(--c-white); border: 1px solid var(--c-border); border-radius: 10px;
+  padding: 14px 16px; position: relative; box-shadow: 0 1px 4px rgba(15,23,42,.05);
+  height: 100%; min-height: 100px;
+}
+.kpi-label  { font-size: .67rem; font-weight: 800; color: var(--c-muted); text-transform: uppercase; letter-spacing: .07em; margin-bottom: 2px; }
+.kpi-value  { font-size: 1.5rem; font-weight: 900; color: var(--c-text); margin: 4px 0 2px; line-height: 1.1; }
+.kpi-sub    { font-size: .7rem; color: var(--c-muted); line-height: 1.4; }
+.kpi-delta-pos { font-size: .7rem; color: var(--c-ok); font-weight: 700; margin-top: 3px; }
+.kpi-delta-neg { font-size: .7rem; color: var(--c-danger); font-weight: 700; margin-top: 3px; }
+/* Tooltip */
+.kpi-tooltip {
+  position: absolute; top: 8px; right: 8px;
+  width: 17px; height: 17px; border-radius: 50%;
+  background: #e2e8f0; color: #64748b;
+  font-size: .64rem; font-weight: 900;
+  display: inline-flex; align-items: center; justify-content: center;
+  cursor: help; user-select: none;
+}
+.kpi-tooltip[title] { text-decoration: none; }
+/* Tooltip via CSS puro — visível em hover */
+.kpi-ttip-wrap { display: inline-block; position: absolute; top: 8px; right: 8px; }
+.kpi-ttip-icon {
+  width: 17px; height: 17px; border-radius: 50%; background: #e2e8f0;
+  color: #64748b; font-size: .63rem; font-weight: 900;
+  display: inline-flex; align-items: center; justify-content: center; cursor: help;
+}
+.kpi-ttip-box {
+  display: none; position: absolute; z-index: 9999;
+  bottom: 130%; right: 0;
+  background: #1e293b; color: #f1f5f9;
+  font-size: .72rem; line-height: 1.55; padding: 10px 13px;
+  border-radius: 9px; width: 270px;
+  box-shadow: 0 6px 20px rgba(0,0,0,.35); white-space: normal;
+}
+.kpi-ttip-box::after {
+  content: ""; position: absolute; top: 100%; right: 4px;
+  border: 6px solid transparent; border-top-color: #1e293b;
+}
+.kpi-ttip-wrap:hover .kpi-ttip-box { display: block; }
 
-  /* Badges de status */
-  .status-ok, .status-warn, .status-off {
-    display: inline-flex;
-    align-items: center;
-    padding: 4px 12px;
-    border-radius: 999px;
-    font-weight: 800;
-    font-size: .82rem;
-    margin-top: 6px;
-  }
-  .status-ok   { background: #dcfce7; color: #166534; }
-  .status-warn { background: #fef3c7; color: #92400e; }
-  .status-off  { background: #f1f5f9; color: #475569; }
+/* ══ INSIGHT CARDS ══ */
+.insight-card {
+  border-radius: 10px; padding: 12px 16px; margin-bottom: 8px;
+  display: flex; gap: 12px; align-items: flex-start;
+}
+.insight-card.info    { background: #eff6ff; border-left: 4px solid #3b82f6; }
+.insight-card.success { background: #f0fdf4; border-left: 4px solid #22c55e; }
+.insight-card.warning { background: #fffbeb; border-left: 4px solid #f59e0b; }
+.insight-card.danger  { background: #fef2f2; border-left: 4px solid #ef4444; }
+.insight-icon  { font-size: 1.1rem; min-width: 20px; padding-top: 1px; }
+.insight-body  { flex: 1; }
+.insight-title { font-size: .83rem; font-weight: 800; color: var(--c-text); margin: 0 0 2px; }
+.insight-text  { font-size: .77rem; color: var(--c-muted); margin: 0; line-height: 1.45; }
 
-  /* Utilitários */
-  .muted         { color: #64748b; font-size: .88rem; }
-  .section-title { font-size: 1rem; font-weight: 800; color: #0f172a; margin: 10px 0 6px; }
+/* ══ REGRAS DE NEGÓCIO ══ */
+.rule-warning { background:#fffbeb; border:1px solid #fde68a; border-left:5px solid #f59e0b; border-radius:8px; padding:12px 14px; margin:10px 0; color:#78350f; font-size:.88rem; }
+.rule-error   { background:#fef2f2; border:1px solid #fecaca; border-left:5px solid #ef4444; border-radius:8px; padding:12px 14px; margin:10px 0; color:#7f1d1d; font-size:.88rem; }
 
-  /* Bloco de aviso de regra de negócio */
-  .rule-warning {
-    background: #fffbeb;
-    border: 1px solid #fde68a;
-    border-left: 5px solid #f59e0b;
-    border-radius: 8px;
-    padding: 14px 16px;
-    margin: 12px 0;
-    color: #78350f;
-    font-size: .93rem;
-  }
-  .rule-error {
-    background: #fef2f2;
-    border: 1px solid #fecaca;
-    border-left: 5px solid #ef4444;
-    border-radius: 8px;
-    padding: 14px 16px;
-    margin: 12px 0;
-    color: #7f1d1d;
-    font-size: .93rem;
-  }
+/* ══ UTILITÁRIOS ══ */
+.section-title { font-size:.93rem; font-weight:800; color:var(--c-text); margin:14px 0 6px; }
+.muted { color:var(--c-muted); font-size:.84rem; }
 
-  /* Formulários */
-  .stForm { border: 1px solid #e2e8f0 !important; border-radius: 10px !important; padding: 16px !important; }
+/* ══ BOTÕES ══ */
+.stButton > button[kind="primary"] { background: var(--c-accent); color:#fff; border-radius:8px; font-weight:700; }
+.stButton > button[kind="primary"]:hover { background:#1d4ed8; }
 
-  /* Botões primários */
-  .stButton > button[kind="primary"] {
-    background: #0f172a;
-    color: white;
-    border-radius: 8px;
-    font-weight: 700;
-  }
+/* ══ FORMULÁRIOS ══ */
+[data-testid="stForm"] { border:1px solid var(--c-border) !important; border-radius:10px !important; padding:16px !important; }
+
+/* ══ GRÁFICO RANK ══ */
+.rank-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 12px; border-radius: 8px; background: #f8fafc;
+  border: 1px solid var(--c-border); margin-bottom: 6px;
+}
+.rank-pos { font-size: 1rem; font-weight: 900; color: var(--c-muted); min-width: 28px; text-align: center; }
+.rank-name { flex: 1; font-size: .85rem; font-weight: 700; color: var(--c-text); }
+.rank-bar-wrap { width: 100px; height: 8px; background: #e2e8f0; border-radius: 999px; overflow: hidden; }
+.rank-bar { height: 100%; border-radius: 999px; background: var(--c-accent); }
+.rank-val { font-size: .8rem; font-weight: 700; color: var(--c-text); min-width: 48px; text-align: right; }
+
+/* ══ RESPONSIVIDADE ══ */
+@media(max-width:768px){
+  .block-container { padding: .75rem 1rem 1.5rem; }
+  .kpi-value { font-size: 1.2rem !important; }
+}
 </style>
 """
 
 st.markdown(CSS, unsafe_allow_html=True)
+
 
 
 # ─────────────────────────────────────────────
@@ -257,16 +405,50 @@ def escape_html(valor):
 
 
 def status_badge(status: str) -> str:
-    classe = {
-        STATUS_CONCLUIDA:   "status-ok",
-        STATUS_EM_ANDAMENTO:"status-warn",
-        STATUS_NAO_INICIADA:"status-off",
-    }.get(status, "status-off")
-    return f'<span class="{classe}">{escape_html(STATUS_LABELS.get(status, status))}</span>'
+    cls = {STATUS_CONCLUIDA:"status-ok", STATUS_EM_ANDAMENTO:"status-warn", STATUS_NAO_INICIADA:"status-off"}.get(status,"status-off")
+    icone = {"CONCLUIDA":"✓","EM_ANDAMENTO":"●","NAO_INICIADA":"○"}.get(status,"○")
+    return f'<span class="{cls}">{icone} {escape_html(STATUS_LABELS.get(status,status))}</span>'
 
 
 def status_card_class(status: str) -> str:
-    return {STATUS_CONCLUIDA: "ok", STATUS_EM_ANDAMENTO: "warn", STATUS_NAO_INICIADA: "off"}.get(status, "off")
+    return {STATUS_CONCLUIDA:"ok",STATUS_EM_ANDAMENTO:"warn",STATUS_NAO_INICIADA:"off"}.get(status,"off")
+
+
+def kpi_card(label: str, valor: str, subtexto: str = "", delta: str = "", delta_pos: bool = True, tooltip: str = "") -> str:
+    """KPI card com tooltip sempre visível ao hover (CSS puro, sem JS)."""
+    delta_html = ""
+    if delta:
+        cls = "kpi-delta-pos" if delta_pos else "kpi-delta-neg"
+        seta = "▲" if delta_pos else "▼"
+        delta_html = f'<div class="{cls}">{seta} {escape_html(delta)}</div>'
+    tooltip_html = ""
+    if tooltip:
+        tooltip_html = (
+            '<div class="kpi-ttip-wrap">'
+            '<div class="kpi-ttip-icon">?</div>'
+            f'<div class="kpi-ttip-box">{escape_html(tooltip)}</div>'
+            '</div>'
+        )
+    return (
+        '<div class="kpi-card">'
+        + tooltip_html
+        + f'<div class="kpi-label">{escape_html(label)}</div>'
+        + f'<div class="kpi-value">{escape_html(str(valor))}</div>'
+        + f'<div class="kpi-sub">{escape_html(subtexto)}</div>'
+        + delta_html
+        + '</div>'
+    )
+
+
+def insight_card(tipo: str, icone: str, titulo: str, texto: str) -> str:
+    return (
+        f'<div class="insight-card {tipo}">'
+        f'<div class="insight-icon">{icone}</div>'
+        '<div class="insight-body">'
+        f'<div class="insight-title">{escape_html(titulo)}</div>'
+        f'<p class="insight-text">{escape_html(texto)}</p>'
+        '</div></div>'
+    )
 
 
 # ─────────────────────────────────────────────
@@ -1362,44 +1544,205 @@ def base_metricas(df):
     return df[df["status"].isin(STATUS_ANALISE)].copy()
 
 
-def calcular_metricas(df):
-    analisavel   = base_metricas(df)
-    concluidas   = analisavel[analisavel["status"] == STATUS_CONCLUIDA]
-    andamento    = analisavel[analisavel["status"] == STATUS_EM_ANDAMENTO]
-    total        = len(analisavel)
-    qtd_conc     = len(concluidas)
-    progresso    = qtd_conc / total * 100 if total else 0
-    horas        = float(analisavel["ch_efetiva"].sum())
-    questoes     = int(analisavel["qtd_questoes_feitas"].sum())
-    acertos      = int(analisavel["qtd_acertos"].sum())
-    desempenho   = acertos / questoes * 100 if questoes else 0
-    dias         = analisavel["data_ref"].dropna().dt.date.nunique() if "data_ref" in analisavel else 0
+def calcular_kpis_avancados(df: pd.DataFrame) -> dict:
+    """Calcula todos os KPIs analíticos de forma centralizada."""
+    hoje = date.today()
+    semana_ini = hoje - timedelta(days=hoje.weekday())
+    semana_pas = semana_ini - timedelta(days=7)
+
+    df = df.copy()
+    df["data_ref"] = pd.to_datetime(df.get("data_execucao", pd.Series(dtype=str)), errors="coerce")
+
+    analisavel = df[df["status"].isin(STATUS_ANALISE)].copy()
+    concluidas = analisavel[analisavel["status"] == STATUS_CONCLUIDA]
+    andamento  = analisavel[analisavel["status"] == STATUS_EM_ANDAMENTO]
+    nao_inic   = df[df["status"] == STATUS_NAO_INICIADA]
+
+    total_tarefas    = len(df)
+    qtd_concluidas   = len(concluidas)
+    qtd_andamento    = len(andamento)
+    qtd_nao_iniciada = len(nao_inic)
+    pct_conclusao    = qtd_concluidas / total_tarefas * 100 if total_tarefas else 0
+
+    horas_total = float(analisavel["ch_efetiva"].sum())
+    questoes    = int(analisavel["qtd_questoes_feitas"].sum())
+    acertos     = int(analisavel["qtd_acertos"].sum())
+    desempenho  = acertos / questoes * 100 if questoes else 0
+
+    dias_ativos_series = analisavel["data_ref"].dropna().dt.date
+    dias_unicos  = sorted(dias_ativos_series.unique()) if len(dias_ativos_series) else []
+    qtd_dias     = len(dias_unicos)
+    media_diaria = horas_total / qtd_dias if qtd_dias else 0
+
+    exec_semana  = analisavel[analisavel["data_ref"].dt.date >= semana_ini]
+    horas_semana = float(exec_semana["ch_efetiva"].sum())
+    conc_semana  = int((exec_semana["status"] == STATUS_CONCLUIDA).sum())
+
+    exec_sem_pas  = analisavel[(analisavel["data_ref"].dt.date >= semana_pas) & (analisavel["data_ref"].dt.date < semana_ini)]
+    horas_sem_pas = float(exec_sem_pas["ch_efetiva"].sum())
+    conc_sem_pas  = int((exec_sem_pas["status"] == STATUS_CONCLUIDA).sum())
+
+    sequencia = 0
+    if dias_unicos:
+        d = hoje
+        while d in dias_unicos:
+            sequencia += 1; d -= timedelta(days=1)
+
+    dias_sem_estudar = (hoje - max(dias_unicos)).days if dias_unicos else 0
+    produtividade    = qtd_concluidas / horas_total if horas_total else 0
+    ritmo_semanal    = conc_semana if conc_semana > 0 else (qtd_concluidas / max(1, qtd_dias) * 7)
+    tarefas_rest     = qtd_andamento + qtd_nao_iniciada
+    semanas_rest     = tarefas_rest / ritmo_semanal if ritmo_semanal > 0 else None
+    previsao         = (hoje + timedelta(weeks=semanas_rest)) if semanas_rest is not None else None
+    media_h_tarefa   = horas_total / qtd_concluidas if qtd_concluidas else 0
+    horas_restantes  = tarefas_rest * media_h_tarefa
+
     return {
-        "analisavel": analisavel,
-        "concluidas_df": concluidas,
-        "andamento_df": andamento,
-        "total": total,
-        "concluidas": qtd_conc,
-        "andamento": len(andamento),
-        "nao_iniciadas": len(df[df["status"] == STATUS_NAO_INICIADA]),
-        "progresso": progresso,
-        "horas": horas,
-        "questoes": questoes,
-        "acertos": acertos,
-        "desempenho": desempenho,
-        "media_dia": horas / dias if dias else 0,
-        "produtividade": qtd_conc / horas if horas else 0,
+        "analisavel": analisavel, "concluidas_df": concluidas, "andamento_df": andamento,
+        "total_tarefas": total_tarefas, "qtd_concluidas": qtd_concluidas,
+        "qtd_andamento": qtd_andamento, "qtd_nao_iniciada": qtd_nao_iniciada,
+        "pct_conclusao": pct_conclusao, "horas_total": horas_total,
+        "horas_semana": horas_semana, "horas_sem_pas": horas_sem_pas,
+        "delta_horas_semana": horas_semana - horas_sem_pas,
+        "conc_semana": conc_semana, "conc_sem_pas": conc_sem_pas,
+        "delta_conc_semana": conc_semana - conc_sem_pas,
+        "questoes": questoes, "acertos": acertos, "desempenho": desempenho,
+        "qtd_dias_ativos": qtd_dias, "media_diaria": media_diaria,
+        "sequencia": sequencia, "dias_sem_estudar": dias_sem_estudar,
+        "produtividade": produtividade, "ritmo_semanal": ritmo_semanal,
+        "tarefas_restantes": tarefas_rest, "previsao_conclusao": previsao,
+        "horas_restantes": horas_restantes, "dias_unicos": dias_unicos,
     }
 
 
-def fig_layout(fig):
+def calcular_metricas(df):
+    """Compatível com código legado."""
+    k = calcular_kpis_avancados(df)
+    return {
+        "analisavel": k["analisavel"], "concluidas_df": k["concluidas_df"],
+        "andamento_df": k["andamento_df"], "total": k["total_tarefas"],
+        "concluidas": k["qtd_concluidas"], "andamento": k["qtd_andamento"],
+        "nao_iniciadas": k["qtd_nao_iniciada"], "progresso": k["pct_conclusao"],
+        "horas": k["horas_total"], "questoes": k["questoes"], "acertos": k["acertos"],
+        "desempenho": k["desempenho"], "media_dia": k["media_diaria"],
+        "produtividade": k["produtividade"],
+    }
+
+
+def gerar_insights(df: pd.DataFrame, kpis: dict, nome_aluno: str = "") -> list:
+    """Gera insights analíticos contextuais baseados nos dados do aluno."""
+    insights = []
+    ana = kpis["analisavel"]
+    nome = nome_aluno or "O aluno"
+    if ana.empty:
+        return [{"tipo":"info","icone":"📭","titulo":"Sem dados suficientes","texto":"Registre atividades para obter análise personalizada."}]
+
+    # Tendência de horas
+    dh = kpis["delta_horas_semana"]
+    hs = kpis["horas_semana"]; hsp = kpis["horas_sem_pas"]
+    if hsp > 0:
+        pct_d = dh / hsp * 100
+        if pct_d < -20:
+            insights.append({"tipo":"warning","icone":"📉","titulo":"Queda de produtividade",
+                "texto":f"{nome} estudou {abs(pct_d):.0f}% menos esta semana ({hs:.1f}h) vs semana anterior ({hsp:.1f}h)."})
+        elif pct_d > 20:
+            insights.append({"tipo":"success","icone":"📈","titulo":"Semana mais produtiva",
+                "texto":f"{nome} aumentou {pct_d:.0f}% as horas esta semana ({hs:.1f}h vs {hsp:.1f}h). Excelente ritmo!"})
+
+    # Sequência
+    seq = kpis["sequencia"]
+    if seq >= 7:
+        insights.append({"tipo":"success","icone":"🔥","titulo":f"Sequência de {seq} dias!",
+            "texto":f"{nome} está estudando há {seq} dias consecutivos. Consistência é fundamental para aprovação."})
+    elif seq == 0 and kpis["dias_sem_estudar"] >= 3:
+        insights.append({"tipo":"warning","icone":"⏰","titulo":"Dias sem estudar",
+            "texto":f"{nome} não registra atividade há {kpis['dias_sem_estudar']} dias. Retome a rotina para não perder o ritmo."})
+
+    # Disciplinas
+    if "disciplina" in ana.columns and len(ana["disciplina"].unique()) > 1:
+        disc_agg = ana.groupby("disciplina", as_index=False).agg(
+            questoes=("qtd_questoes_feitas","sum"), acertos=("qtd_acertos","sum"),
+            horas=("ch_efetiva","sum"), tarefas=("tarefa_id","count"),
+            concluidas=("status", lambda s:(s==STATUS_CONCLUIDA).sum()))
+        disc_agg["desempenho"] = disc_agg.apply(lambda r: r["acertos"]/r["questoes"]*100 if r["questoes"] else 0, axis=1)
+        disc_agg["pct_conc"]   = disc_agg.apply(lambda r: r["concluidas"]/r["tarefas"]*100 if r["tarefas"] else 0, axis=1)
+
+        criticas = disc_agg[(disc_agg["questoes"]>0) & (disc_agg["desempenho"]<60)].sort_values("desempenho")
+        for _, r in criticas.head(2).iterrows():
+            insights.append({"tipo":"danger","icone":"🚨","titulo":f"Atenção: {r['disciplina']}",
+                "texto":f"Desempenho de {r['desempenho']:.1f}% em {r['disciplina']} abaixo de 60%. Dedique sessões de revisão e questões comentadas."})
+
+        total_h = disc_agg["horas"].sum()
+        if total_h > 0:
+            neg = disc_agg[(disc_agg["horas"]/total_h < 0.05) & (disc_agg["tarefas"]>0)]
+            for _, r in neg.head(2).iterrows():
+                insights.append({"tipo":"warning","icone":"📌","titulo":f"Disciplina negligenciada: {r['disciplina']}",
+                    "texto":f"Apenas {r['horas']:.1f}h em {r['disciplina']} (<5% do tempo). Reequilibre a distribuição."})
+
+        avancadas = disc_agg[disc_agg["pct_conc"]>=80].sort_values("pct_conc", ascending=False)
+        if not avancadas.empty:
+            nomes = ", ".join(avancadas.head(3)["disciplina"].tolist())
+            insights.append({"tipo":"success","icone":"🏆","titulo":"Disciplinas avançadas",
+                "texto":f"Ótimo progresso em: {nomes}. Continue com revisões."})
+
+    # Risco de atraso
+    prev = kpis.get("previsao_conclusao")
+    if prev and kpis["tarefas_restantes"] > 0:
+        dias_p = (prev - date.today()).days
+        if dias_p > 365:
+            insights.append({"tipo":"danger","icone":"⚠️","titulo":"Risco de atraso alto",
+                "texto":f"No ritmo atual, conclusão estimada em {prev.strftime('%d/%m/%Y')} ({dias_p} dias). Considere aumentar a carga semanal."})
+        elif dias_p > 180:
+            insights.append({"tipo":"warning","icone":"📅","titulo":"Previsão de conclusão",
+                "texto":f"Estimativa: {prev.strftime('%d/%m/%Y')} ({dias_p} dias). Mantenha o ritmo."})
+
+    # Produtividade
+    prod = kpis["produtividade"]
+    if prod >= 1.5:
+        insights.append({"tipo":"success","icone":"⚡","titulo":"Alta produtividade",
+            "texto":f"{prod:.2f} tarefas/hora — excelente eficiência."})
+    elif 0 < prod < 0.3:
+        insights.append({"tipo":"info","icone":"🕐","titulo":"Sessões longas, pouco avanço",
+            "texto":f"Produtividade de {prod:.2f} tarefas/hora. Experimente sessões mais curtas com foco (técnica Pomodoro)."})
+
+    # Consistência
+    md = kpis["media_diaria"]
+    if md >= 4:
+        insights.append({"tipo":"success","icone":"📚","titulo":"Consistência acima da média",
+            "texto":f"Média de {md:.1f}h/dia ativo — ritmo sólido para aprovação."})
+    elif 0 < md < 1:
+        insights.append({"tipo":"warning","icone":"⏱️","titulo":"Carga diária baixa",
+            "texto":f"Média de {md:.1f}h/dia ativo. Para concursos competitivos, recomenda-se ≥4h/dia."})
+
+    if not insights:
+        insights.append({"tipo":"info","icone":"✅","titulo":"Estudos em dia",
+            "texto":f"{nome} não apresenta alertas críticos. Continue monitorando o progresso."})
+    return insights
+
+
+def fig_layout(fig, height=320):
+    """Aplica estilo visual padrão a qualquer figura Plotly."""
     fig.update_layout(
         legend_title_text="Legenda",
-        margin=dict(l=10, r=10, t=56, b=10),
+        margin=dict(l=10, r=10, t=46, b=10),
+        height=height,
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
-        font=dict(color="#0f172a"),
+        font=dict(color="#0f172a", family="Inter, sans-serif"),
+        legend=dict(orientation="h", yanchor="bottom", y=-0.35, xanchor="center", x=0.5),
     )
+    fig.update_xaxes(showgrid=False, linecolor="#e2e8f0", tickfont=dict(size=10))
+    fig.update_yaxes(showgrid=True, gridcolor="#f1f5f9", linecolor="rgba(0,0,0,0)", tickfont=dict(size=10))
+    return fig
+
+
+def grafico_vazio(msg="Sem dados suficientes para este gráfico."):
+    """Retorna figura vazia com mensagem amigável."""
+    fig = go.Figure()
+    fig.add_annotation(text=msg, x=0.5, y=0.5, xref="paper", yref="paper",
+        showarrow=False, font=dict(size=13, color="#94a3b8"))
+    fig.update_layout(height=260, paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(visible=False), yaxis=dict(visible=False))
     return fig
 
 
@@ -1464,14 +1807,320 @@ def tela_troca_obrigatoria():
 
 
 # ─────────────────────────────────────────────
+# TELA: DASHBOARD — funções auxiliares
+# ─────────────────────────────────────────────
+
+def _render_kpis_produtividade(kpis: dict):
+    hs  = kpis["horas_semana"]
+    hsp = kpis["horas_sem_pas"]
+    dh  = kpis["delta_horas_semana"]
+    seq = kpis["sequencia"]
+    dsem = kpis["dias_sem_estudar"]
+    cols = st.columns(5)
+    cards = [
+        kpi_card("Horas esta semana", f"{hs:.1f}h", f"Semana anterior: {hsp:.1f}h",
+            f"{abs(dh):.1f}h vs sem. passada", delta_pos=(dh >= 0),
+            tooltip="Total de horas desta semana (seg–hoje). Fórmula: soma de ch_efetiva com data ≥ início da semana. ▲ = mais horas que a semana anterior."),
+        kpi_card("Média diária", f"{kpis['media_diaria']:.1f}h", "por dia ativo (com registro)",
+            tooltip="Horas médias por dia com atividade registrada. Fórmula: total de horas ÷ dias distintos. ≥ 4h/dia = consistente para concursos."),
+        kpi_card("Sequência atual", f"{seq} dia{'s' if seq!=1 else ''}", "dias consecutivos com registro",
+            tooltip="Dias seguidos (até hoje) com pelo menos uma atividade. Calculado para trás a partir de hoje. Sequências longas = hábito consolidado."),
+        kpi_card("Dias sem estudar", f"{dsem}", "desde o último registro",
+            delta=f"{dsem}d de pausa" if dsem > 0 else "", delta_pos=False,
+            tooltip="Dias desde o último registro. 0 = estudou hoje. Acima de 3 dias = alerta de pausa."),
+        kpi_card("Produtividade", f"{kpis['produtividade']:.2f}", "tarefas concluídas / hora",
+            tooltip="Eficiência: tarefas concluídas por hora. Fórmula: concluídas ÷ horas. > 1,0 = boa taxa. < 0,3 = sessões longas com pouco resultado."),
+    ]
+    for col, card in zip(cols, cards):
+        with col: render_html(card)
+
+
+def _render_kpis_avanco(kpis: dict):
+    pct   = kpis["pct_conclusao"]
+    prev  = kpis.get("previsao_conclusao")
+    prev_str = prev.strftime("%d/%m/%Y") if prev else "—"
+    cols = st.columns(5)
+    cards = [
+        kpi_card("Progresso geral", f"{pct:.1f}%",
+            f"{kpis['qtd_concluidas']} de {kpis['total_tarefas']} tarefas concluídas",
+            tooltip="% de tarefas concluídas. Fórmula: (concluídas ÷ total) × 100. Considera apenas status CONCLUIDA."),
+        kpi_card("Em andamento", f"{kpis['qtd_andamento']}", f"+ {kpis['qtd_nao_iniciada']} não iniciadas",
+            tooltip="Tarefas com status EM_ANDAMENTO. Muitas simultâneas podem indicar falta de foco."),
+        kpi_card("Tarefas restantes", f"{kpis['tarefas_restantes']}", "andamento + não iniciadas",
+            tooltip="Total de tarefas não concluídas. Base para estimativa de conclusão do plano."),
+        kpi_card("Horas restantes (est.)", f"{kpis['horas_restantes']:.0f}h", "base: média por tarefa concluída",
+            tooltip="Estimativa de horas para concluir o restante. Fórmula: (horas ÷ concluídas) × restantes. Baseado no ritmo atual."),
+        kpi_card("Previsão de conclusão", prev_str, "baseado no ritmo semanal atual",
+            tooltip="Data estimada de término. Fórmula: hoje + (restantes ÷ ritmo semanal) semanas. Ritmo = média de conclusões/semana."),
+    ]
+    for col, card in zip(cols, cards):
+        with col: render_html(card)
+
+
+def _render_kpis_desempenho(kpis: dict):
+    des = kpis["desempenho"]; q = kpis["questoes"]; ac = kpis["acertos"]
+    cs  = kpis["conc_semana"]; csp = kpis["conc_sem_pas"]; dc = kpis["delta_conc_semana"]
+    cols = st.columns(4)
+    cards = [
+        kpi_card("Desempenho geral", f"{des:.1f}%", f"{ac} acertos em {q} questões",
+            tooltip="Taxa de acerto. Fórmula: (acertos ÷ questões) × 100. ≥ 70% = satisfatório para concursos."),
+        kpi_card("Questões feitas", f"{q:,}".replace(",","."), "total acumulado",
+            tooltip="Soma de todas as questões feitas em atividades iniciadas/concluídas. Mais questões = maior treinamento."),
+        kpi_card("Concluídas esta semana", f"{cs}", f"semana anterior: {csp}",
+            delta=f"{abs(dc)} tarefa{'s' if abs(dc)!=1 else ''} vs sem. ant.", delta_pos=(dc >= 0),
+            tooltip="Tarefas concluídas na semana atual (segunda a hoje). ▲ = aceleração em relação à semana passada."),
+        kpi_card("Dias ativos", f"{kpis['qtd_dias_ativos']}", "dias com pelo menos 1 registro",
+            tooltip="Dias distintos com algum registro. Maior número = hábito mais sólido e frequência maior."),
+    ]
+    for col, card in zip(cols, cards):
+        with col: render_html(card)
+
+
+def _aba_visao_geral(df_filtrado, analisavel):
+    status_df = df_filtrado.groupby("status", as_index=False)["tarefa_id"].count().rename(columns={"tarefa_id":"qtd"})
+    status_df["label"] = status_df["status"].map(STATUS_LABELS)
+    col_a, col_b = st.columns(2)
+    with col_a:
+        fig = go.Figure(go.Bar(
+            x=status_df["label"], y=status_df["qtd"],
+            marker_color=[STATUS_CORES.get(s,"#94a3b8") for s in status_df["status"]],
+            text=status_df["qtd"], textposition="outside"))
+        fig.update_layout(title="Distribuição por status", showlegend=False)
+        st.plotly_chart(fig_layout(fig, 300), use_container_width=True)
+    with col_b:
+        if not analisavel.empty and "aluno" in analisavel.columns:
+            pa = analisavel.groupby("aluno", as_index=False).agg(
+                horas=("ch_efetiva","sum"), concluidas=("status", lambda s:(s==STATUS_CONCLUIDA).sum())
+            ).sort_values("horas", ascending=True)
+            fig = go.Figure()
+            fig.add_trace(go.Bar(name="Horas", y=pa["aluno"], x=pa["horas"], orientation="h", marker_color="#3b82f6"))
+            fig.add_trace(go.Bar(name="Concluídas", y=pa["aluno"], x=pa["concluidas"], orientation="h", marker_color="#22c55e"))
+            fig.update_layout(title="Horas × Conclusões por aluno", barmode="group")
+            st.plotly_chart(fig_layout(fig, 300), use_container_width=True)
+        else:
+            st.plotly_chart(grafico_vazio("Sem atividades para comparação."), use_container_width=True)
+
+
+def _aba_disciplinas(analisavel):
+    if analisavel.empty:
+        st.info("Sem dados analisáveis."); return
+    disc = analisavel.groupby("disciplina", as_index=False).agg(
+        tarefas=("tarefa_id","count"), horas=("ch_efetiva","sum"),
+        questoes=("qtd_questoes_feitas","sum"), acertos=("qtd_acertos","sum"),
+        concluidas=("status", lambda s:(s==STATUS_CONCLUIDA).sum()),
+    )
+    disc["progresso"]  = disc.apply(lambda r: r["concluidas"]/r["tarefas"]*100 if r["tarefas"] else 0, axis=1)
+    disc["desempenho"] = disc.apply(lambda r: r["acertos"]/r["questoes"]*100 if r["questoes"] else 0, axis=1)
+    col_a, col_b = st.columns(2)
+    with col_a:
+        d = disc.sort_values("progresso")
+        fig = go.Figure(go.Bar(
+            x=d["progresso"], y=d["disciplina"], orientation="h",
+            text=d["progresso"].map(lambda v: f"{v:.0f}%"), textposition="outside",
+            marker_color=d["progresso"].map(lambda v: "#22c55e" if v>=80 else ("#f59e0b" if v>=40 else "#ef4444")),
+        ))
+        fig.update_layout(title="Progresso por disciplina (%)")
+        st.plotly_chart(fig_layout(fig, max(280, len(disc)*36)), use_container_width=True)
+    with col_b:
+        fig = go.Figure()
+        fig.add_trace(go.Bar(name="Horas", x=disc["disciplina"], y=disc["horas"], marker_color="#3b82f6"))
+        fig.add_trace(go.Scatter(name="Desempenho (%)", x=disc["disciplina"], y=disc["desempenho"],
+            mode="lines+markers", marker_color="#f59e0b", yaxis="y2", line=dict(width=2)))
+        fig.update_layout(title="Horas × Desempenho", yaxis2=dict(overlaying="y", side="right", range=[0,100]))
+        st.plotly_chart(fig_layout(fig, 300), use_container_width=True)
+    if len(disc) >= 3:
+        fig_r = go.Figure(go.Scatterpolar(
+            r=disc["desempenho"].tolist()+[disc["desempenho"].tolist()[0]],
+            theta=disc["disciplina"].tolist()+[disc["disciplina"].tolist()[0]],
+            fill="toself", fillcolor="rgba(59,130,246,0.15)",
+            line=dict(color="#3b82f6", width=2),
+        ))
+        fig_r.update_layout(title="Radar de desempenho", polar=dict(radialaxis=dict(visible=True, range=[0,100])), showlegend=False)
+        st.plotly_chart(fig_layout(fig_r, 360), use_container_width=True)
+    st.dataframe(disc.rename(columns={"progresso":"Progresso (%)","desempenho":"Desempenho (%)","horas":"Horas","questoes":"Questões","acertos":"Acertos","tarefas":"Tarefas","concluidas":"Concluídas"}), use_container_width=True, hide_index=True)
+
+
+def _aba_evolucao(analisavel):
+    if analisavel.empty or "data_ref" not in analisavel.columns:
+        st.info("Sem dados de evolução."); return
+    evo = analisavel.dropna(subset=["data_ref"]).copy()
+    if evo.empty:
+        st.info("Sem datas de execução."); return
+    evo["dia"] = evo["data_ref"].dt.date
+    diario = evo.groupby("dia", as_index=False).agg(horas=("ch_efetiva","sum"), tarefas=("tarefa_id","count"))
+    diario["dia_ts"] = pd.to_datetime(diario["dia"])
+    diario["media7"] = diario["horas"].rolling(7, min_periods=1).mean()
+    fig = go.Figure()
+    fig.add_trace(go.Bar(x=diario["dia_ts"], y=diario["horas"], name="Horas/dia", marker_color="#3b82f6", opacity=0.7))
+    fig.add_trace(go.Scatter(x=diario["dia_ts"], y=diario["media7"], name="Média 7 dias", mode="lines", line=dict(color="#f59e0b", width=2, dash="dot")))
+    fig.update_layout(title="Evolução diária de horas + média móvel 7 dias")
+    st.plotly_chart(fig_layout(fig, 300), use_container_width=True)
+    col_a, col_b = st.columns(2)
+    with col_a:
+        sem = evo.set_index("data_ref").resample("W").agg(horas=("ch_efetiva","sum"), concluidas=("status", lambda s:(s==STATUS_CONCLUIDA).sum())).reset_index()
+        sem["label"] = sem["data_ref"].dt.strftime("Sem %d/%m")
+        if not sem.empty:
+            fig2 = go.Figure()
+            fig2.add_trace(go.Bar(x=sem["label"], y=sem["horas"], name="Horas", marker_color="#3b82f6"))
+            fig2.add_trace(go.Scatter(x=sem["label"], y=sem["concluidas"], name="Concluídas", mode="lines+markers", yaxis="y2", marker_color="#22c55e", line=dict(width=2)))
+            fig2.update_layout(title="Horas × Conclusões semanais", yaxis2=dict(overlaying="y", side="right"))
+            st.plotly_chart(fig_layout(fig2, 300), use_container_width=True)
+    with col_b:
+        ordem_dias = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]
+        labels_dias = {"Monday":"Seg","Tuesday":"Ter","Wednesday":"Qua","Thursday":"Qui","Friday":"Sex","Saturday":"Sáb","Sunday":"Dom"}
+        evo["dia_semana"] = evo["data_ref"].dt.day_name()
+        ds = evo.groupby("dia_semana", as_index=False).agg(horas=("ch_efetiva","sum"))
+        ds = ds[ds["dia_semana"].isin(ordem_dias)]
+        ds["dia_semana"] = pd.Categorical(ds["dia_semana"], categories=ordem_dias, ordered=True)
+        ds = ds.sort_values("dia_semana")
+        ds["label"] = ds["dia_semana"].map(labels_dias)
+        if not ds.empty:
+            fig3 = go.Figure(go.Bar(
+                x=ds["label"], y=ds["horas"],
+                marker_color=["#22c55e" if h==ds["horas"].max() else "#3b82f6" for h in ds["horas"]],
+                text=ds["horas"].map(lambda v: f"{v:.1f}h"), textposition="outside"))
+            fig3.update_layout(title="Distribuição por dia da semana")
+            st.plotly_chart(fig_layout(fig3, 300), use_container_width=True)
+
+
+def _aba_gestao_tempo(analisavel):
+    if analisavel.empty:
+        st.info("Sem dados para análise de tempo."); return
+    col_a, col_b, col_c = st.columns(3)
+    with col_a:
+        tipos = analisavel.groupby("tipo", as_index=False).agg(horas=("ch_efetiva","sum"))
+        tipos = tipos[tipos["horas"]>0].sort_values("horas", ascending=False)
+        fig = px.pie(tipos, names="tipo", values="horas", color_discrete_sequence=px.colors.qualitative.Set3)
+        fig.update_traces(textposition="inside", textinfo="percent+label")
+        fig.update_layout(title="Distribuição por tipo de estudo", showlegend=False)
+        st.plotly_chart(fig_layout(fig, 300), use_container_width=True)
+    with col_b:
+        bd = analisavel.groupby("disciplina", as_index=False).agg(horas=("ch_efetiva","sum")).sort_values("horas", ascending=True)
+        tot = bd["horas"].sum() or 1
+        bd["pct"] = bd["horas"]/tot*100
+        fig2 = go.Figure(go.Bar(x=bd["horas"], y=bd["disciplina"], orientation="h",
+            text=bd["pct"].map(lambda v: f"{v:.0f}%"), textposition="outside", marker_color="#3b82f6"))
+        fig2.update_layout(title="Horas por disciplina")
+        st.plotly_chart(fig_layout(fig2, max(280, len(bd)*36)), use_container_width=True)
+    with col_c:
+        ef = analisavel.groupby("tipo", as_index=False).agg(questoes=("qtd_questoes_feitas","sum"), horas=("ch_efetiva","sum"))
+        ef = ef[ef["horas"]>0]
+        ef["eficiencia"] = ef["questoes"]/ef["horas"]
+        ef = ef.sort_values("eficiencia", ascending=False)
+        if not ef.empty:
+            fig3 = go.Figure(go.Bar(x=ef["tipo"], y=ef["eficiencia"],
+                text=ef["eficiencia"].map(lambda v: f"{v:.1f}"), textposition="outside",
+                marker_color=["#22c55e" if v==ef["eficiencia"].max() else "#3b82f6" for v in ef["eficiencia"]]))
+            fig3.update_layout(title="Questões/hora por tipo")
+            st.plotly_chart(fig_layout(fig3, 300), use_container_width=True)
+        else:
+            st.plotly_chart(grafico_vazio("Sem dados de questões."), use_container_width=True)
+
+
+def _aba_ranking(analisavel):
+    if analisavel.empty:
+        st.info("Sem dados para ranking."); return
+    ag = analisavel.groupby("aluno", as_index=False).agg(
+        horas=("ch_efetiva","sum"), concluidas=("status", lambda s:(s==STATUS_CONCLUIDA).sum()),
+        questoes=("qtd_questoes_feitas","sum"), acertos=("qtd_acertos","sum"),
+        dias=("data_ref", lambda s: s.dropna().dt.date.nunique()),
+    )
+    ag["desempenho"]   = ag.apply(lambda r: r["acertos"]/r["questoes"]*100 if r["questoes"] else 0, axis=1)
+    ag["produtividade"] = ag.apply(lambda r: r["concluidas"]/r["horas"] if r["horas"] else 0, axis=1)
+
+    def _rank_rows(df_s, col, fmt, cor):
+        mx = df_s[col].max() or 1; html = ""
+        medals = {0:"🥇",1:"🥈",2:"🥉"}
+        for i,(_, r) in enumerate(df_s.iterrows()):
+            pos = medals.get(i, str(i+1))
+            pct = r[col]/mx*100
+            val = fmt.format(r[col])
+            html += (f'<div class="rank-row"><div class="rank-pos">{pos}</div>'
+                f'<div class="rank-name">{escape_html(r["aluno"])}</div>'
+                f'<div class="rank-bar-wrap"><div class="rank-bar" style="width:{pct:.0f}%;background:{cor}"></div></div>'
+                f'<div class="rank-val">{escape_html(val)}</div></div>')
+        return html
+
+    col_a, col_b, col_c = st.columns(3)
+    with col_a:
+        render_html('<div class="section-title">🏆 Produtividade (t/h)</div>')
+        render_html(_rank_rows(ag.sort_values("produtividade",ascending=False), "produtividade", "{:.2f}", "#3b82f6"))
+    with col_b:
+        render_html('<div class="section-title">🔥 Consistência (dias)</div>')
+        render_html(_rank_rows(ag.sort_values("dias",ascending=False), "dias", "{:.0f}", "#22c55e"))
+    with col_c:
+        render_html('<div class="section-title">📊 Desempenho (%)</div>')
+        render_html(_rank_rows(ag.sort_values("desempenho",ascending=False), "desempenho", "{:.1f}%", "#f59e0b"))
+    st.markdown("---")
+    st.dataframe(ag.sort_values("produtividade",ascending=False).rename(columns={
+        "horas":"Horas","concluidas":"Concluídas","questoes":"Questões","acertos":"Acertos",
+        "dias":"Dias ativos","desempenho":"Desempenho (%)","produtividade":"Produtividade (t/h)"}),
+        use_container_width=True, hide_index=True)
+
+
+def _aba_analise_ia(df_filtrado, visao, kpis):
+    analisavel = kpis["analisavel"]
+    if analisavel.empty:
+        st.info("Sem atividades para análise."); return
+    alunos_lista = sorted(analisavel["aluno"].dropna().unique().tolist()) if visao == "Todos" else [visao]
+    for nome_aluno in alunos_lista:
+        grupo = df_filtrado[df_filtrado["aluno"]==nome_aluno].copy() if nome_aluno != "Todos" else df_filtrado.copy()
+        grupo["data_ref"] = pd.to_datetime(grupo.get("data_execucao", pd.Series(dtype=str)), errors="coerce")
+        kpis_al = calcular_kpis_avancados(grupo)
+        insights = gerar_insights(grupo, kpis_al, nome_aluno)
+        with st.expander(f"🧠 {nome_aluno}", expanded=(len(alunos_lista)==1)):
+            c1,c2,c3,c4 = st.columns(4)
+            c1.metric("Horas esta semana", f"{kpis_al['horas_semana']:.1f}h", delta=f"{kpis_al['delta_horas_semana']:+.1f}h vs sem. ant.")
+            c2.metric("Progresso geral", f"{kpis_al['pct_conclusao']:.1f}%")
+            c3.metric("Desempenho", f"{kpis_al['desempenho']:.1f}%")
+            c4.metric("Sequência", f"{kpis_al['sequencia']} dias",
+                delta=f"{kpis_al['dias_sem_estudar']}d sem estudar" if kpis_al["dias_sem_estudar"]>0 else "Estudou hoje")
+            render_html('<div class="section-title">Análise automática</div>')
+            for ins in insights:
+                render_html(insight_card(ins["tipo"],ins["icone"],ins["titulo"],ins["texto"]))
+            ana_al = kpis_al["analisavel"]
+            if not ana_al.empty and "data_ref" in ana_al.columns:
+                evo = ana_al.dropna(subset=["data_ref"]).copy()
+                if not evo.empty:
+                    sem = evo.set_index("data_ref").resample("W").agg(horas=("ch_efetiva","sum"), concluidas=("status", lambda s:(s==STATUS_CONCLUIDA).sum())).reset_index()
+                    sem["label"] = sem["data_ref"].dt.strftime("Sem %d/%m")
+                    if len(sem) > 1:
+                        fig = go.Figure()
+                        fig.add_trace(go.Bar(x=sem["label"], y=sem["horas"], name="Horas", marker_color="#3b82f6"))
+                        fig.add_trace(go.Scatter(x=sem["label"], y=sem["concluidas"], name="Concluídas", mode="lines+markers", yaxis="y2", marker_color="#22c55e", line=dict(width=2)))
+                        fig.update_layout(title=f"Evolução semanal — {nome_aluno}", yaxis2=dict(overlaying="y", side="right"))
+                        st.plotly_chart(fig_layout(fig, 240), use_container_width=True)
+            if not ana_al.empty and "disciplina" in ana_al.columns:
+                da = ana_al.groupby("disciplina", as_index=False).agg(
+                    questoes=("qtd_questoes_feitas","sum"), acertos=("qtd_acertos","sum"),
+                    tarefas=("tarefa_id","count"), concluidas=("status", lambda s:(s==STATUS_CONCLUIDA).sum()),
+                )
+                da["desempenho"] = da.apply(lambda r: r["acertos"]/r["questoes"]*100 if r["questoes"] else 0, axis=1)
+                da["progresso"]  = da.apply(lambda r: r["concluidas"]/r["tarefas"]*100 if r["tarefas"] else 0, axis=1)
+                frageis  = da[(da["questoes"]>0) & (da["desempenho"]<70)].sort_values("desempenho")
+                criticas = da[da["progresso"]<30].sort_values("progresso")
+                if not frageis.empty or not criticas.empty:
+                    render_html('<div class="section-title">Disciplinas que precisam de atenção</div>')
+                    fc1, fc2 = st.columns(2)
+                    with fc1:
+                        if not frageis.empty:
+                            st.caption("🔴 Baixo desempenho em questões (<70%)")
+                            st.dataframe(frageis[["disciplina","desempenho","questoes","acertos"]].rename(columns={"disciplina":"Disciplina","desempenho":"Desempenho (%)","questoes":"Questões","acertos":"Acertos"}), hide_index=True, use_container_width=True)
+                    with fc2:
+                        if not criticas.empty:
+                            st.caption("⚠️ Baixo progresso (<30% concluído)")
+                            st.dataframe(criticas[["disciplina","progresso","tarefas","concluidas"]].rename(columns={"disciplina":"Disciplina","progresso":"Progresso (%)","tarefas":"Tarefas","concluidas":"Concluídas"}), hide_index=True, use_container_width=True)
+
+
+# ─────────────────────────────────────────────
 # TELA: DASHBOARD
 # ─────────────────────────────────────────────
 
 def dashboard():
     render_html(f"""
         <div class="hero">
-          <h1>{APP_NAME}</h1>
-          <p>Visão consolidada, análise individual, evolução e comparação entre alunos.</p>
+          <h1>📊 {APP_NAME}</h1>
+          <p>Dashboard analítico: produtividade, avanço, desempenho, evolução e análise inteligente.</p>
         </div>
     """)
     df = carregar_execucoes()
@@ -1484,196 +2133,32 @@ def dashboard():
         st.info("Nenhum registro encontrado com os filtros selecionados.")
         return
 
-    metricas = calcular_metricas(df_filtrado)
-    analisavel = metricas["analisavel"]
-    st.caption(
-        "Os indicadores e gráficos consideram apenas atividades Em andamento ou Concluídas. "
-        "Atividades Não iniciadas aparecem como fila, mas não entram nos percentuais."
-    )
+    df_filtrado = df_filtrado.copy()
+    df_filtrado["data_ref"] = pd.to_datetime(df_filtrado.get("data_execucao", pd.Series(dtype=str)), errors="coerce")
+    kpis = calcular_kpis_avancados(df_filtrado)
+    analisavel = kpis["analisavel"]
+    st.caption("📌 Passe o mouse sobre ? para ver fórmula e interpretação de cada indicador. Considera atividades Em andamento e Concluídas.")
 
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Taxa de conclusão", f"{metricas['progresso']:.1f}%")
-    c2.metric("Tarefas concluídas", metricas["concluidas"])
-    c3.metric("Em andamento", metricas["andamento"])
-    c4.metric("Não iniciadas", metricas["nao_iniciadas"])
+    render_html('<div class="section-title">⚡ Produtividade</div>')
+    _render_kpis_produtividade(kpis)
+    render_html('<div class="section-title">📈 Avanço no plano</div>')
+    _render_kpis_avanco(kpis)
+    render_html('<div class="section-title">🎯 Desempenho</div>')
+    _render_kpis_desempenho(kpis)
+    st.markdown("---")
 
-    c5, c6, c7, c8 = st.columns(4)
-    c5.metric("Horas estudadas", f"{metricas['horas']:.2f}")
-    c6.metric("Média por dia ativo", f"{metricas['media_dia']:.2f}h")
-    c7.metric("Desempenho", f"{metricas['desempenho']:.1f}%")
-    c8.metric("Produtividade", f"{metricas['produtividade']:.2f} tarefas/h")
+    abas = st.tabs(["📊 Visão geral","📚 Disciplinas","📅 Evolução","⏱️ Gestão do tempo","🏆 Rankings","🧠 Análise IA","📋 Atividades"])
 
-    abas = st.tabs(["Visão geral", "Disciplinas", "Tipos de estudo", "Comparação", "Evolução", "Análise inteligente", "Atividades"])
-
-    with abas[0]:
-        col_a, col_b = st.columns([1.25, 1])
-        status_df = (
-            df_filtrado.groupby("status", as_index=False)["tarefa_id"]
-            .count()
-            .rename(columns={"tarefa_id": "tarefas"})
-        )
-        status_df["status_label"] = status_df["status"].map(STATUS_LABELS)
-        col_a.plotly_chart(
-            fig_layout(px.bar(
-                status_df, x="status_label", y="tarefas", color="status",
-                color_discrete_map=STATUS_CORES, text_auto=True,
-                title="Distribuição das atividades por status",
-                labels={"status_label": "Status", "tarefas": "Quantidade", "status": "Legenda"},
-            )),
-            use_container_width=True,
-        )
-        if not analisavel.empty:
-            por_aluno = (
-                analisavel.groupby("aluno", as_index=False)
-                .agg(horas=("ch_efetiva", "sum"), concluidas=("status", lambda s: (s == STATUS_CONCLUIDA).sum()))
-                .sort_values("horas", ascending=False)
-            )
-            col_b.plotly_chart(
-                fig_layout(px.bar(
-                    por_aluno, x="aluno", y=["horas", "concluidas"], barmode="group",
-                    title="Produtividade consolidada por aluno",
-                    labels={"aluno": "Aluno", "value": "Total", "variable": "Indicador"},
-                )),
-                use_container_width=True,
-            )
-        else:
-            col_b.info("Sem atividades iniciadas ou concluídas para os filtros.")
-
-    with abas[1]:
-        if analisavel.empty:
-            st.info("Sem dados analisáveis.")
-        else:
-            disc = (
-                analisavel.groupby("disciplina", as_index=False)
-                .agg(
-                    tarefas=("tarefa_id", "count"),
-                    horas=("ch_efetiva", "sum"),
-                    questoes=("qtd_questoes_feitas", "sum"),
-                    acertos=("qtd_acertos", "sum"),
-                    concluidas=("status", lambda s: (s == STATUS_CONCLUIDA).sum()),
-                )
-            )
-            disc["progresso"]  = disc["concluidas"] / disc["tarefas"] * 100
-            disc["desempenho"] = disc.apply(lambda r: r["acertos"] / r["questoes"] * 100 if r["questoes"] else 0, axis=1)
-            disc["disciplina_label"] = disc["disciplina"].apply(quebrar_texto)
-            col_a, col_b = st.columns(2)
-            col_a.plotly_chart(
-                fig_layout(px.bar(disc.sort_values("progresso"), x="disciplina_label", y="progresso",
-                    text_auto=".1f", title="Progresso por disciplina",
-                    labels={"disciplina_label": "Disciplina", "progresso": "% concluído"})),
-                use_container_width=True,
-            )
-            col_b.plotly_chart(
-                fig_layout(px.bar(disc.sort_values("horas", ascending=False), x="disciplina_label", y="horas",
-                    text_auto=".1f", title="Tempo estudado por disciplina",
-                    labels={"disciplina_label": "Disciplina", "horas": "Horas efetivas"})),
-                use_container_width=True,
-            )
-            st.dataframe(disc.drop(columns=["disciplina_label"]), use_container_width=True, hide_index=True)
-
-    with abas[2]:
-        if analisavel.empty:
-            st.info("Sem dados analisáveis.")
-        else:
-            tipos = (
-                analisavel.groupby("tipo", as_index=False)
-                .agg(horas=("ch_efetiva", "sum"), tarefas=("tarefa_id", "count"), questoes=("qtd_questoes_feitas", "sum"))
-                .sort_values("horas", ascending=False)
-            )
-            tipos["produtividade"] = tipos.apply(lambda r: r["tarefas"] / r["horas"] if r["horas"] else 0, axis=1)
-            col_a, col_b = st.columns(2)
-            col_a.plotly_chart(fig_layout(px.pie(tipos, names="tipo", values="horas", title="Tipos de estudo mais utilizados")), use_container_width=True)
-            col_b.plotly_chart(
-                fig_layout(px.bar(tipos, x="tipo", y="produtividade", text_auto=".2f",
-                    title="Produtividade por tipo de estudo",
-                    labels={"tipo": "Tipo de estudo", "produtividade": "Tarefas por hora"})),
-                use_container_width=True,
-            )
-            st.dataframe(tipos, use_container_width=True, hide_index=True)
-
-    with abas[3]:
-        if analisavel.empty:
-            st.info("Sem dados para comparação.")
-        else:
-            comp = (
-                analisavel.groupby("aluno", as_index=False)
-                .agg(
-                    horas=("ch_efetiva", "sum"),
-                    tarefas=("tarefa_id", "count"),
-                    concluidas=("status", lambda s: (s == STATUS_CONCLUIDA).sum()),
-                    questoes=("qtd_questoes_feitas", "sum"),
-                    acertos=("qtd_acertos", "sum"),
-                    disciplinas=("disciplina", "nunique"),
-                )
-            )
-            comp["desempenho"]   = comp.apply(lambda r: r["acertos"] / r["questoes"] * 100 if r["questoes"] else 0, axis=1)
-            comp["produtividade"] = comp.apply(lambda r: r["concluidas"] / r["horas"] if r["horas"] else 0, axis=1)
-            comp = comp.sort_values(["produtividade", "concluidas"], ascending=False)
-            st.plotly_chart(
-                fig_layout(px.scatter(
-                    comp, x="horas", y="concluidas", size="questoes", color="desempenho", hover_name="aluno",
-                    title="Comparação entre alunos: tempo, conclusão e desempenho",
-                    labels={"horas": "Horas estudadas", "concluidas": "Tarefas concluídas", "desempenho": "Desempenho (%)"},
-                )),
-                use_container_width=True,
-            )
-            st.dataframe(comp, use_container_width=True, hide_index=True)
-
-    with abas[4]:
-        evolucao = analisavel.dropna(subset=["data_ref"]).copy() if not analisavel.empty else pd.DataFrame()
-        if evolucao.empty:
-            st.info("Sem datas de execução para evolução.")
-        else:
-            evolucao["dia"] = evolucao["data_ref"].dt.date
-            diario = evolucao.groupby(["dia", "status"], as_index=False).agg(horas=("ch_efetiva", "sum"), tarefas=("tarefa_id", "count"))
-            diario["dia_label"] = pd.to_datetime(diario["dia"]).dt.strftime("%d/%m/%Y")
-            st.plotly_chart(
-                fig_layout(px.bar(diario, x="dia_label", y="horas", color="status", color_discrete_map=STATUS_CORES,
-                    title="Evolução diária da carga horária efetiva",
-                    labels={"dia_label": "Data", "horas": "Carga horária (h)", "status": "Status"},
-                    hover_data={"tarefas": True, "dia": False})),
-                use_container_width=True,
-            )
-            semanal = evolucao.set_index("data_ref").resample("W")["ch_efetiva"].sum().reset_index()
-            semanal["semana"] = semanal["data_ref"].dt.strftime("%d/%m/%Y")
-            st.plotly_chart(
-                fig_layout(px.line(semanal, x="semana", y="ch_efetiva", markers=True,
-                    title="Evolução semanal de estudos",
-                    labels={"semana": "Semana encerrada em", "ch_efetiva": "Horas efetivas"})),
-                use_container_width=True,
-            )
-
-    with abas[5]:
-        if analisavel.empty:
-            st.info("Sem atividades iniciadas ou concluídas para análise.")
-        else:
-            alunos_lista = sorted(analisavel["aluno"].dropna().unique().tolist()) if visao == "Todos" else [visao]
-            for aluno in alunos_lista:
-                grupo = analisavel[analisavel["aluno"] == aluno] if aluno != "Todos" else analisavel
-                m = calcular_metricas(grupo)
-                st.markdown(f"**{aluno}**")
-                if m["horas"] == 0:
-                    st.warning("Sem carga horária registrada nas atividades iniciadas ou concluídas.")
-                elif m["desempenho"] and m["desempenho"] < 70:
-                    st.warning(f"Desempenho de {m['desempenho']:.1f}%. Reforce revisão ativa e questões comentadas.")
-                elif m["progresso"] < 45:
-                    st.info(f"Taxa de conclusão de {m['progresso']:.1f}%. Priorize concluir atividades já iniciadas.")
-                else:
-                    st.success(f"Ritmo consistente: {m['horas']:.1f}h, {m['concluidas']} tarefas concluídas, {m['produtividade']:.2f} tarefas/h.")
-                fracas = (
-                    grupo.groupby("disciplina", as_index=False)
-                    .agg(questoes=("qtd_questoes_feitas", "sum"), acertos=("qtd_acertos", "sum"), horas=("ch_efetiva", "sum"))
-                )
-                fracas["desempenho"] = fracas.apply(lambda r: r["acertos"] / r["questoes"] * 100 if r["questoes"] else 0, axis=1)
-                fracas = fracas[(fracas["questoes"] > 0) & (fracas["desempenho"] < 70)].sort_values("desempenho")
-                if not fracas.empty:
-                    st.caption("Disciplinas para atenção: " + ", ".join(fracas["disciplina"].head(4).tolist()))
-
+    with abas[0]: _aba_visao_geral(df_filtrado, analisavel)
+    with abas[1]: _aba_disciplinas(analisavel)
+    with abas[2]: _aba_evolucao(analisavel)
+    with abas[3]: _aba_gestao_tempo(analisavel)
+    with abas[4]: _aba_ranking(analisavel)
+    with abas[5]: _aba_analise_ia(df_filtrado, visao, kpis)
     with abas[6]:
         tabela = preparar_tabela(df_filtrado)
-        colunas = ["aluno", "tarefa", "disciplina", "aula", "assunto", "tipo", "status_label", "data_execucao", "ch_efetiva", "qtd_questoes_feitas", "qtd_acertos", "desempenho", "comentario"]
-        colunas_disp = [c for c in colunas if c in tabela.columns]
-        st.dataframe(tabela[colunas_disp], use_container_width=True, hide_index=True, row_height=72)
+        colunas = ["aluno","tarefa","disciplina","aula","assunto","tipo","status_label","data_execucao","ch_efetiva","qtd_questoes_feitas","qtd_acertos","desempenho","comentario"]
+        st.dataframe(tabela[[c for c in colunas if c in tabela.columns]], use_container_width=True, hide_index=True, row_height=72)
 
 
 # ─────────────────────────────────────────────
