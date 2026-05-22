@@ -2257,120 +2257,69 @@ def _verificar_regra_andamento(tarefas_df: pd.DataFrame, tarefa_selecionada, nov
     return False, msg
 
 
-def _card_tarefa(tarefa) -> str:
-    """Card visual com os dados atuais da tarefa selecionada (lidos do banco)."""
-    status_atual = str(tarefa.get("status", STATUS_NAO_INICIADA))
-    badge        = status_badge(status_atual)
-    data_fmt     = formatar_data_br(tarefa.get("data_execucao")) or "—"
-    ch           = float(tarefa.get("ch_efetiva") or 0)
-    questoes     = int(tarefa.get("qtd_questoes_feitas") or 0)
-    acertos      = int(tarefa.get("qtd_acertos") or 0)
-    desempenho   = int(tarefa.get("desempenho") or 0)
-    comentario   = escape_html(tarefa.get("comentario") or "—")
-    card_cls     = status_card_class(status_atual)
-
-    return f"""
-    <div class="quick-card {card_cls}" style="margin-bottom:12px">
-      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
-        <div>
-          <div class="quick-label">Dados registrados atualmente</div>
-          <div style="font-size:.97rem;font-weight:800;color:var(--c-text);margin:3px 0">
-            Tarefa {escape_html(str(tarefa.get('tarefa','')))} — {escape_html(str(tarefa.get('disciplina','')))}
-          </div>
-          <div class="muted" style="font-size:.78rem">
-            {escape_html(str(tarefa.get('aula') or ''))}
-            {(' › ' + escape_html(str(tarefa.get('assunto','')))) if tarefa.get('assunto') else ''}
-          </div>
-        </div>
-        <div>{badge}</div>
-      </div>
-      <div class="quick-grid" style="margin-top:10px">
-        <div class="quick-item"><div class="quick-label">Data</div><div class="quick-value">{data_fmt}</div></div>
-        <div class="quick-item"><div class="quick-label">Tempo</div><div class="quick-value">{ch:.2f}h</div></div>
-        <div class="quick-item"><div class="quick-label">Questões</div><div class="quick-value">{questoes}</div></div>
-        <div class="quick-item"><div class="quick-label">Acertos / Desempenho</div><div class="quick-value">{acertos} &nbsp;·&nbsp; {desempenho:.0f}%</div></div>
-        <div class="quick-item" style="grid-column:span 4"><div class="quick-label">Observações</div><div class="quick-value">{comentario}</div></div>
-      </div>
-    </div>
-    """
-
-
 def _renderizar_secao_registro(tarefas_df: pd.DataFrame, aluno_id: int, status_alvo: str, titulo: str, key_prefix: str):
     """
     Renderiza a seção de registro de uma aba (por status).
-
-    Fluxo:
-    1. Usuário seleciona a tarefa → formulário pré-carregado com os dados atuais do banco.
-    2. Usuário edita e clica em Salvar.
-    3. Sistema valida → grava → exibe mensagem clara de sucesso ou erro.
+    Ao selecionar uma tarefa o formulário é pré-preenchido automaticamente
+    com os dados salvos no banco. O usuário edita apenas o que quiser e salva.
     """
     grupo = tarefas_df[tarefas_df["status"] == status_alvo].copy()
     if grupo.empty:
-        render_html(f"""
-            <div style="text-align:center;padding:32px;color:var(--c-muted);font-size:.9rem">
-              ✅ Nenhuma tarefa <strong>{STATUS_LABELS[status_alvo].lower()}</strong> no momento.
-            </div>
-        """)
+        render_html(
+            f'<div style="text-align:center;padding:32px;color:var(--c-muted);font-size:.9rem">'
+            f'Nenhuma tarefa <strong>{STATUS_LABELS[status_alvo].lower()}</strong> no momento.'
+            f'</div>'
+        )
         return
 
-    # ── Seletor de tarefa ──
-    opcoes = grupo["tarefa_id"].tolist()
+    # ── Seletor ──
     tarefa_id = st.selectbox(
-        f"Selecione a tarefa",
-        opcoes,
+        "Selecione a tarefa",
+        grupo["tarefa_id"].tolist(),
         format_func=lambda v: _label_tarefa(grupo[grupo["tarefa_id"] == v].iloc[0]),
         key=f"{key_prefix}_sel",
     )
     tarefa = grupo[grupo["tarefa_id"] == tarefa_id].iloc[0]
 
-    # ── Card com dados atuais (carregados automaticamente ao selecionar) ──
-    render_html(_card_tarefa(tarefa))
-
-    # ── Aviso para tarefas concluídas ──
+    # ── Aviso para concluídas ──
     eh_concluida = (status_alvo == STATUS_CONCLUIDA)
     if eh_concluida:
-        render_html("""
-            <div class="rule-warning">
-              ⚠️ <strong>Atenção:</strong> Esta tarefa já está <strong>Concluída</strong>.
-              Qualquer alteração modifica dados históricos. Confirme no formulário abaixo antes de salvar.
-            </div>
-        """)
+        render_html(
+            '<div class="rule-warning">'
+            '⚠️ <strong>Atenção:</strong> Esta tarefa já está <strong>Concluída</strong>. '
+            'Qualquer alteração modifica dados históricos. Confirme no formulário antes de salvar.'
+            '</div>'
+        )
 
-    # ── Formulário pré-preenchido com os valores atuais do registro ──
+    # ── Preparar valores do banco ──
     status_atual = str(tarefa.get("status", STATUS_NAO_INICIADA))
-    tipo_idx     = TIPOS_ESTUDO.index(tarefa["tipo"]) if tarefa["tipo"] in TIPOS_ESTUDO else TIPOS_ESTUDO.index("Outro")
+    tipo_atual   = str(tarefa.get("tipo") or "Outro")
+    tipo_idx     = TIPOS_ESTUDO.index(tipo_atual) if tipo_atual in TIPOS_ESTUDO else TIPOS_ESTUDO.index("Outro")
 
-    # Recuperar data_execucao do registro; se nula, usa hoje
-    data_atual = None
+    data_atual = date.today()
     if tarefa.get("data_execucao"):
         try:
             data_atual = pd.to_datetime(tarefa["data_execucao"]).date()
         except Exception:
-            data_atual = None
-    if data_atual is None:
-        data_atual = date.today()
+            pass
 
+    # ── Formulário pré-preenchido ──
     with st.form(f"form_{key_prefix}_{tarefa_id}", border=True):
-        st.markdown("##### ✏️ Editar registro")
-
         col1, col2, col3, col4 = st.columns(4)
         novo_status = col1.selectbox(
-            "Novo status",
+            "Status",
             STATUS_VALIDOS,
             index=STATUS_VALIDOS.index(status_atual),
             format_func=lambda v: STATUS_LABELS[v],
-            help="Altere o status da tarefa conforme o progresso atual.",
         )
         tipo_estudo = col2.selectbox(
             "Tipo de estudo",
             TIPOS_ESTUDO,
             index=tipo_idx,
-            help="Método utilizado nesta sessão de estudo.",
         )
         data_estudo = col3.date_input(
             "Data do estudo",
             value=data_atual,
-            help="Data em que o estudo foi realizado.",
         )
         ch = col4.number_input(
             "Tempo gasto (h)",
@@ -2378,7 +2327,6 @@ def _renderizar_secao_registro(tarefas_df: pd.DataFrame, aluno_id: int, status_a
             value=float(tarefa.get("ch_efetiva") or 0),
             step=0.25,
             format="%.2f",
-            help="Carga horária efetiva dedicada a esta tarefa.",
         )
 
         col5, col6 = st.columns(2)
@@ -2387,21 +2335,18 @@ def _renderizar_secao_registro(tarefas_df: pd.DataFrame, aluno_id: int, status_a
             min_value=0,
             value=int(tarefa.get("qtd_questoes_feitas") or 0),
             step=1,
-            help="Total de questões resolvidas nesta tarefa.",
         )
         acertos = col6.number_input(
             "Acertos",
             min_value=0,
             value=int(tarefa.get("qtd_acertos") or 0),
             step=1,
-            help="Quantidade de questões respondidas corretamente.",
         )
 
         comentario = st.text_area(
             "Observações",
             value=str(tarefa.get("comentario") or ""),
             placeholder="Anotações sobre esta sessão de estudo (opcional)…",
-            help="Registre dificuldades, conteúdos vistos ou lembretes para revisão.",
         )
 
         if eh_concluida:
@@ -2413,25 +2358,22 @@ def _renderizar_secao_registro(tarefas_df: pd.DataFrame, aluno_id: int, status_a
             confirmado = True
 
         col_btn1, col_btn2 = st.columns([3, 1])
-        salvar  = col_btn1.form_submit_button("💾 Salvar alteração", use_container_width=True, type="primary")
+        salvar   = col_btn1.form_submit_button("💾 Salvar", use_container_width=True, type="primary")
         cancelar = col_btn2.form_submit_button("✖ Cancelar", use_container_width=True)
 
     if cancelar:
-        st.info("Alteração cancelada.")
+        st.info("Nenhuma alteração foi salva.")
         return
 
     if not salvar:
         return
 
-    # ── Validações com feedback claro ──
+    # ── Validações ──
     erros = []
-
     if acertos > questoes:
         erros.append("O número de acertos não pode ser maior que o número de questões feitas.")
-
     if eh_concluida and not confirmado:
-        erros.append("Para alterar uma tarefa já concluída, marque a confirmação no formulário.")
-
+        erros.append("Para alterar uma tarefa já concluída, marque a confirmação acima.")
     pode, msg_bloqueio = _verificar_regra_andamento(tarefas_df, tarefa, novo_status, int(tarefa["disciplina_id"]))
     if not pode:
         erros.append(msg_bloqueio)
@@ -2450,21 +2392,19 @@ def _renderizar_secao_registro(tarefas_df: pd.DataFrame, aluno_id: int, status_a
                 questoes, novo_status, tipo_estudo,
             )
         limpar_cache()
-
-        # Mensagem de sucesso detalhada
-        status_anterior = STATUS_LABELS.get(status_atual, status_atual)
-        status_novo     = STATUS_LABELS.get(novo_status, novo_status)
-        mudou_status    = status_atual != novo_status
-        msg_status      = f" · Status: **{status_anterior} → {status_novo}**" if mudou_status else ""
-        st.success(
+        status_ant = STATUS_LABELS.get(status_atual, status_atual)
+        status_nov = STATUS_LABELS.get(novo_status, novo_status)
+        mudou = status_atual != novo_status
+        msg = (
             f"✅ Registro salvo com sucesso! "
-            f"Tarefa **{int(tarefa['tarefa'])}** ({tarefa['disciplina']}){msg_status} · "
-            f"{ch:.2f}h registradas · {acertos}/{questoes} acertos."
+            f"Tarefa **{int(tarefa['tarefa'])}** — {tarefa['disciplina']}"
+            + (f" · Status: **{status_ant} → {status_nov}**" if mudou else "")
+            + f" · {ch:.2f}h · {acertos}/{questoes} acertos."
         )
+        st.success(msg)
         st.rerun()
-
     except Exception as exc:
-        erro_usuario("❌ Não foi possível salvar o registro. Verifique os dados e tente novamente.", exc)
+        erro_usuario("❌ Não foi possível salvar. Verifique os dados e tente novamente.", exc)
 
 
 def tela_registro_rapido():
