@@ -1187,6 +1187,10 @@ def importar_planilha_referencia(caminho=PLANILHA_REFERENCIA, substituir=True):
 
 
 def importar_execucoes_ciclo(caminho_excel):
+    """
+    Importador legado: lê aba CICLO_REG com um aluno por arquivo.
+    Mantido por compatibilidade com arquivos individuais.
+    """
     caminho_excel = Path(caminho_excel)
     if not caminho_excel.exists():
         st.error(f"Arquivo não encontrado: {caminho_excel}")
@@ -1270,6 +1274,261 @@ def importar_execucoes_ciclo(caminho_excel):
         return False
     limpar_cache()
     return True
+
+
+def _status_ciclo_para_interno(status_planilha: str) -> str:
+    """Converte status da planilha Ciclo Consolidado para o status interno."""
+    mapa = {
+        "concluido":     STATUS_CONCLUIDA,
+        "concluído":     STATUS_CONCLUIDA,
+        "em andamento":  STATUS_EM_ANDAMENTO,
+        "nao iniciado":  STATUS_NAO_INICIADA,
+        "não iniciado":  STATUS_NAO_INICIADA,
+    }
+    return mapa.get(chave_texto(str(status_planilha or "")), STATUS_NAO_INICIADA)
+
+
+def _data_segura(valor) -> str | None:
+    """Converte datetime/string do Excel para 'YYYY-MM-DD' ou None."""
+    if valor is None:
+        return None
+    if isinstance(valor, str) and valor.strip() in ("", "—", "-"):
+        return None
+    try:
+        ts = pd.to_datetime(valor)
+        if pd.isnull(ts):
+            return None
+        return str(ts.date())
+    except Exception:
+        return None
+
+
+def importar_ciclo_consolidado(caminho_excel, modo: str = "substituir") -> dict:
+    """
+    Importa o arquivo 'Ciclo Consolidado' (formato com dois alunos por linha).
+
+    Estrutura esperada — aba CICLO_CONSOLIDADO, linha de cabeçalho na linha 3:
+        col 0  BLOCO
+        col 1  DISCIPLINA
+        col 2  OBJETIVO DO BLOCO
+        col 3  STATUS          (Concluído / Em Andamento / Não Iniciado)
+        col 4  DATA ESTUDO (PROGRAMADA)
+        col 5  (mesclada — ignorada)
+        col 6  CH EFETIVA (LILIAN)
+        col 7  AULA ATUAL (LILIAN)
+        col 8  QUESTÕES (L)
+        col 9  ACERTOS (L)
+        col 10 CH EFETIVA (JESSICA)
+        col 11 AULA ATUAL (JESSICA)
+        col 12 QUESTÕES (J)
+        col 13 ACERTOS (J)
+        col 14 CH TOTAL
+        col 15 TOTAL QUESTÕES
+        col 16 TOTAL ACERTOS
+        col 17 DESEMPENHO (%)
+
+    Retorna dict com {ok, registros, erros, avisos}.
+    """
+    caminho_excel = Path(caminho_excel)
+    resultado = {"ok": False, "registros": 0, "erros": [], "avisos": []}
+
+    if not caminho_excel.exists():
+        resultado["erros"].append(f"Arquivo não encontrado: {caminho_excel}")
+        return resultado
+
+    # ── Detecta os nomes dos alunos na linha 2 (índice 1) ──
+    try:
+        import openpyxl
+        wb = openpyxl.load_workbook(str(caminho_excel), read_only=True, data_only=True)
+    except Exception as exc:
+        resultado["erros"].append(f"Erro ao abrir arquivo: {exc}")
+        return resultado
+
+    if "CICLO_CONSOLIDADO" not in wb.sheetnames:
+        resultado["erros"].append("Aba 'CICLO_CONSOLIDADO' não encontrada. Verifique o arquivo.")
+        return resultado
+
+    ws = wb["CICLO_CONSOLIDADO"]
+
+    # Linha 2 (índice 1) → identificação dos alunos
+    # Formato: ['IDENTIFICAÇÃO', None, ..., 'LILIAN', None, ..., 'JESSICA', None, ..., 'CONSOLIDADO', ...]
+    todas_linhas = list(ws.iter_rows(values_only=True))
+    if len(todas_linhas) < 4:
+        resultado["erros"].append("Arquivo com poucas linhas — formato inesperado.")
+        return resultado
+
+    linha_identificacao = list(todas_linhas[1])  # linha 2
+    # Detecta nomes de alunos nas colunas 6 e 10 (posições fixas do formato)
+    nome_aluno_a = limpar_texto(linha_identificacao[6]) if len(linha_identificacao) > 6 else None
+    nome_aluno_b = limpar_texto(linha_identificacao[10]) if len(linha_identificacao) > 10 else None
+
+    if not nome_aluno_a:
+        nome_aluno_a = "Aluno A"
+        resultado["avisos"].append("Nome do primeiro aluno não detectado — usando 'Aluno A'.")
+    if not nome_aluno_b:
+        nome_aluno_b = "Aluno B"
+        resultado["avisos"].append("Nome do segundo aluno não detectado — usando 'Aluno B'.")
+
+    # Linhas de dados: a partir da linha 4 (índice 3), pula cabeçalho e linhas de bloco sem disciplina
+    linhas_dados = []
+    bloco_atual = None
+    for linha in todas_linhas[3:]:
+        bloco_val = limpar_texto(linha[0]) if linha[0] else None
+        disc_val  = limpar_texto(linha[1]) if len(linha) > 1 else None
+
+        # Atualiza bloco atual (ffill)
+        if bloco_val and bloco_val != "TOTAIS GERAIS":
+            bloco_atual = bloco_val
+
+        # Só processa linhas com disciplina e bloco válido
+        if not disc_val or not bloco_atual:
+            continue
+        if bloco_atual == "TOTAIS GERAIS":
+            continue
+
+        linhas_dados.append((bloco_atual, linha))
+
+    if not linhas_dados:
+        resultado["erros"].append("Nenhuma linha de dado encontrada no arquivo.")
+        return resultado
+
+    # ── Garante alunos no banco ──
+    try:
+        with conectar() as conn:
+            for nome in [nome_aluno_a, nome_aluno_b]:
+                conn.execute(
+                    """
+                    INSERT INTO alunos (nome, email, senha, perfil, ativo, force_troca_senha)
+                    VALUES (?, ?, ?, 'Aluno', 1, 1)
+                    ON CONFLICT(nome) DO UPDATE SET ativo = 1
+                    """,
+                    (nome, email_local(nome), hash_senha("123")),
+                )
+
+            id_a = conn.execute("SELECT id FROM alunos WHERE nome = ?", (nome_aluno_a,)).fetchone()[0]
+            id_b = conn.execute("SELECT id FROM alunos WHERE nome = ?", (nome_aluno_b,)).fetchone()[0]
+
+            if modo == "substituir":
+                conn.execute("DELETE FROM execucoes WHERE aluno_id IN (?, ?)", (id_a, id_b))
+
+            # Carrega tarefas do banco indexadas por (trilha, chave_disciplina)
+            tarefas_db = conn.execute(
+                """
+                SELECT t.id, COALESCE(t.trilha, 0), d.nome,
+                       COALESCE(t.conteudo, ''), COALESCE(t.qtd_exercicios_previstos, 0)
+                FROM tarefas t
+                JOIN disciplinas d ON d.id = t.disciplina_id
+                WHERE t.ativo = 1 AND d.ativo = 1
+                ORDER BY t.numero
+                """
+            ).fetchall()
+
+            # Aliases de normalização para disciplinas com variações de nome
+            aliases_disc = {
+                "matematica e raciocinio logico":               "matematica e raciocinio logico",
+                "matematica e raciocínio lógico":               "matematica e raciocinio logico",
+                "resolucao de questoes":                        "resolucao de questoes",
+                "resolução de questões":                        "resolucao de questoes",
+                "resolucao de questoes erradas":                "resolucao de questoes erradas",
+                "resolução de questões erradas":                "resolucao de questoes erradas",
+                "administracao geral e publica":                "administracao geral e publica",
+                "administração geral e pública":                "administracao geral e publica",
+                "administracao financeira e orcamentaria":      "administracao financeira e orcamentaria",
+                "administração financeira e orçamentária":      "administracao financeira e orcamentaria",
+                "contabilidade publica":                        "contabilidade publica",
+                "contabilidade pública":                        "contabilidade publica",
+            }
+
+            por_chave: dict = {}
+            for tid, trilha, disc_nome, conteudo, previstos in tarefas_db:
+                ck = aliases_disc.get(chave_texto(disc_nome), chave_texto(disc_nome))
+                por_chave.setdefault((int(trilha or 0), ck), []).append(
+                    (int(tid), int(previstos or 0), limpar_texto(conteudo) or "")
+                )
+
+            registros_gravados = 0
+
+            for bloco, linha in linhas_dados:
+                # Extrai número do bloco → trilha
+                m = re.search(r"(\d+)", str(bloco))
+                if not m:
+                    resultado["avisos"].append(f"Bloco sem número: '{bloco}' — ignorado.")
+                    continue
+                trilha_num = int(m.group(1))
+
+                disciplina_raw = limpar_texto(linha[1])
+                ck_disc = aliases_disc.get(chave_texto(disciplina_raw), chave_texto(disciplina_raw))
+
+                status_planilha = limpar_texto(linha[3]) if len(linha) > 3 else None
+                status_interno  = _status_ciclo_para_interno(status_planilha or "")
+                data_programada = _data_segura(linha[4] if len(linha) > 4 else None)
+
+                # Dados Aluno A
+                ch_a      = converter_horas(linha[6]  if len(linha) > 6  else None)
+                aula_a    = limpar_texto(linha[7]  if len(linha) > 7  else None)
+                quest_a   = converter_inteiro(linha[8]  if len(linha) > 8  else None)
+                acert_a   = converter_inteiro(linha[9]  if len(linha) > 9  else None)
+
+                # Dados Aluno B
+                ch_b      = converter_horas(linha[10] if len(linha) > 10 else None)
+                aula_b    = limpar_texto(linha[11] if len(linha) > 11 else None)
+                quest_b   = converter_inteiro(linha[12] if len(linha) > 12 else None)
+                acert_b   = converter_inteiro(linha[13] if len(linha) > 13 else None)
+
+                # Encontra tarefas correspondentes no banco
+                tarefas_match = por_chave.get((trilha_num, ck_disc), [])
+                if not tarefas_match:
+                    resultado["avisos"].append(
+                        f"Sem tarefa no banco para Bloco {trilha_num} / {disciplina_raw} — linha ignorada."
+                    )
+                    continue
+
+                # Distribui questões/acertos proporcionalmente entre as tarefas do bloco
+                pesos = [p for _, p, _ in tarefas_match]
+
+                for aluno_id, ch_aluno, quest_aluno, acert_aluno, aula_aluno in [
+                    (id_a, ch_a, quest_a, acert_a, aula_a),
+                    (id_b, ch_b, quest_b, acert_b, aula_b),
+                ]:
+                    tem_dado = ch_aluno > 0 or quest_aluno > 0 or acert_aluno > 0 or bool(aula_aluno)
+                    if not tem_dado and status_interno == STATUS_NAO_INICIADA:
+                        # Garante que o vínculo existe como NAO_INICIADA sem sobrescrever dados
+                        for tid, _, _ in tarefas_match:
+                            upsert_execucao(
+                                conn, aluno_id, tid,
+                                data_programada, 0, None, 0, 0,
+                                None, 0, STATUS_NAO_INICIADA,
+                            )
+                        continue
+
+                    qtd_tarefas = len(tarefas_match)
+                    ch_por = ch_aluno / qtd_tarefas if qtd_tarefas and ch_aluno else 0
+                    qdist  = distribuir_inteiro(quest_aluno, pesos)
+                    adist  = distribuir_inteiro(acert_aluno, qdist)
+
+                    for idx, (tid, _, _) in enumerate(tarefas_match):
+                        upsert_execucao(
+                            conn, aluno_id, tid,
+                            data_programada,
+                            ch_por, None, 0,
+                            adist[idx],
+                            aula_aluno,
+                            qdist[idx],
+                            status_interno,
+                        )
+                        registros_gravados += 1
+
+    except Exception as exc:
+        resultado["erros"].append(f"Erro durante importação: {exc}")
+        if DEBUG:
+            import traceback
+            resultado["erros"].append(traceback.format_exc())
+        return resultado
+
+    limpar_cache()
+    resultado["ok"] = True
+    resultado["registros"] = registros_gravados
+    return resultado
 
 
 # ─────────────────────────────────────────────
@@ -2935,30 +3194,120 @@ def tela_alunos():
 
 def tela_importacao():
     st.header("Importações")
-    st.caption(f"Planilha de referência atual: `{PLANILHA_REFERENCIA}`")
-    col1, col2 = st.columns(2)
-    with col1:
-        arquivo = st.file_uploader("Planilha referência (.xlsx)", type=["xlsx"])
+
+    abas = st.tabs([
+        "📋 Planilha de referência",
+        "📊 Ciclo Consolidado (multi-aluno)",
+        "👤 Planilhas individuais (legado)",
+    ])
+
+    # ── Aba 1: Planilha de referência ──
+    with abas[0]:
+        st.caption(f"Planilha de referência padrão: `{PLANILHA_REFERENCIA}`")
+        arquivo = st.file_uploader("Planilha referência (.xlsx)", type=["xlsx"], key="ref_upload")
         if arquivo is not None:
             destino = BASE_DIR / "planilha_referencia_importada.xlsx"
             destino.write_bytes(arquivo.getbuffer())
-            if st.button("Importar referência enviada", type="primary"):
+            if st.button("Importar referência enviada", type="primary", key="ref_envio"):
                 if importar_planilha_referencia(destino, substituir=True):
-                    st.success("Referência importada.")
+                    st.success("Referência importada com sucesso.")
                     st.rerun()
-        elif st.button("Reimportar referência padrão"):
+        elif st.button("Reimportar referência padrão", key="ref_padrao"):
             if importar_planilha_referencia(PLANILHA_REFERENCIA, substituir=True):
                 st.success("Referência padrão importada.")
                 st.rerun()
-    with col2:
-        arquivos = st.file_uploader("Planilhas de alunos", type=["xlsx"], accept_multiple_files=True)
-        if arquivos and st.button("Importar execuções dos alunos", type="primary"):
+
+        st.markdown("---")
+        c1, c2, c3, c4, c5 = st.columns(5)
+        c1.metric("Estudantes", int(consultar("SELECT COUNT(*) qtd FROM alunos WHERE perfil='Aluno' AND ativo=1").iloc[0].qtd))
+        c2.metric("Disciplinas", int(consultar("SELECT COUNT(*) qtd FROM disciplinas WHERE ativo=1").iloc[0].qtd))
+        c3.metric("Aulas",      int(consultar("SELECT COUNT(*) qtd FROM aulas WHERE ativo=1").iloc[0].qtd))
+        c4.metric("Tarefas",    int(consultar("SELECT COUNT(*) qtd FROM tarefas WHERE ativo=1").iloc[0].qtd))
+        c5.metric("Execuções",  int(consultar("SELECT COUNT(*) qtd FROM execucoes").iloc[0].qtd))
+
+    # ── Aba 2: Ciclo Consolidado ──
+    with abas[1]:
+        render_html("""
+            <div class="insight-card info" style="margin-bottom:14px">
+              <div class="insight-icon">ℹ️</div>
+              <div class="insight-body">
+                <div class="insight-title">Formato esperado: Ciclo Consolidado</div>
+                <p class="insight-text">
+                  Arquivo com aba <strong>CICLO_CONSOLIDADO</strong>, linha de cabeçalho na linha 3.<br>
+                  Colunas: <em>BLOCO · DISCIPLINA · OBJETIVO · STATUS · DATA PROGRAMADA ·
+                  CH/AULA/QUESTÕES/ACERTOS (Aluno A) · CH/AULA/QUESTÕES/ACERTOS (Aluno B) ·
+                  CH TOTAL · TOTAL QUESTÕES · TOTAL ACERTOS · DESEMPENHO</em>.<br>
+                  Os nomes dos alunos são lidos automaticamente da linha 2 do arquivo.
+                </p>
+              </div>
+            </div>
+        """)
+
+        arquivo_cc = st.file_uploader(
+            "Arquivo Ciclo Consolidado (.xlsx)",
+            type=["xlsx"],
+            key="cc_upload",
+        )
+
+        col_modo, col_btn = st.columns([2, 1])
+        modo = col_modo.radio(
+            "Modo de importação",
+            ["substituir", "acumular"],
+            format_func=lambda v: "🔄 Substituir execuções existentes" if v == "substituir" else "➕ Acumular (não apaga execuções anteriores)",
+            horizontal=True,
+            key="cc_modo",
+        )
+
+        if arquivo_cc is not None:
+            destino_cc = BASE_DIR / arquivo_cc.name
+            destino_cc.write_bytes(arquivo_cc.getbuffer())
+
+            # Pré-visualização: mostra nomes detectados
+            try:
+                import openpyxl as _opx
+                _wb = _opx.load_workbook(str(destino_cc), read_only=True, data_only=True)
+                if "CICLO_CONSOLIDADO" in _wb.sheetnames:
+                    _linhas = list(_wb["CICLO_CONSOLIDADO"].iter_rows(values_only=True, max_row=3))
+                    _nome_a = limpar_texto(_linhas[1][6]) if len(_linhas) > 1 and len(_linhas[1]) > 6 else "?"
+                    _nome_b = limpar_texto(_linhas[1][10]) if len(_linhas) > 1 and len(_linhas[1]) > 10 else "?"
+                    st.info(f"Alunos detectados: **{_nome_a}** e **{_nome_b}**")
+            except Exception:
+                pass
+
+            if col_btn.button("▶ Importar", type="primary", use_container_width=True, key="cc_importar"):
+                with st.spinner("Importando…"):
+                    resultado = importar_ciclo_consolidado(destino_cc, modo=modo)
+
+                if resultado["erros"]:
+                    for e in resultado["erros"]:
+                        st.error(e)
+                if resultado["avisos"]:
+                    with st.expander(f"⚠️ {len(resultado['avisos'])} aviso(s)"):
+                        for av in resultado["avisos"]:
+                            st.warning(av)
+                if resultado["ok"]:
+                    st.success(
+                        f"✅ Importação concluída! "
+                        f"**{resultado['registros']}** execuções gravadas."
+                    )
+                    st.rerun()
+
+    # ── Aba 3: Planilhas individuais (legado) ──
+    with abas[2]:
+        st.caption("Formato legado: um arquivo por aluno com aba CICLO_REG.")
+        arquivos = st.file_uploader(
+            "Planilhas individuais (.xlsx)",
+            type=["xlsx"],
+            accept_multiple_files=True,
+            key="ind_upload",
+        )
+        if arquivos and st.button("Importar planilhas individuais", type="primary", key="ind_importar"):
             ok = 0
             for arq in arquivos:
                 destino = BASE_DIR / arq.name
                 destino.write_bytes(arq.getbuffer())
                 ok += int(importar_execucoes_ciclo(destino))
-            st.success(f"Planilhas processadas: {ok}.")
+            st.success(f"Planilhas processadas com sucesso: {ok}.")
             st.rerun()
 
 
