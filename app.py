@@ -3429,6 +3429,21 @@ def tela_disciplinas():
 # TELA: ALUNOS
 # ─────────────────────────────────────────────
 
+def _excluir_aluno_cascade(aluno_id: int) -> str:
+    """
+    Remove permanentemente um aluno e todos os dados relacionados:
+    execuções, vínculos e o próprio registro na tabela alunos.
+    Retorna o nome do aluno excluído.
+    """
+    with conectar() as conn:
+        row = conn.execute("SELECT nome FROM alunos WHERE id = ?", (int(aluno_id),)).fetchone()
+        nome = row[0] if row else str(aluno_id)
+        conn.execute("DELETE FROM execucoes WHERE aluno_id = ?", (int(aluno_id),))
+        conn.execute("DELETE FROM alunos WHERE id = ? AND perfil = 'Aluno'", (int(aluno_id),))
+    limpar_cache()
+    return nome
+
+
 def tela_alunos():
     st.header("Alunos")
     usuario = aluno_logado()
@@ -3436,57 +3451,218 @@ def tela_alunos():
         st.info("Somente gestores podem administrar alunos.")
         return
 
-    with st.form("novo_aluno", clear_on_submit=True):
-        col1, col2 = st.columns(2)
-        nome   = col1.text_input("Nome")
-        email  = col2.text_input("E-mail")
-        salvar = st.form_submit_button("Adicionar aluno")
-    if salvar:
-        nome  = limpar_texto(nome)
-        email = normalizar_email(email) or email_local(nome)
-        if not nome:
-            st.error("Informe o nome.")
+    abas = st.tabs(["👥 Alunos ativos", "➕ Novo aluno", "🧹 Limpeza de usuários"])
+
+    # ── Aba 1: Alunos ativos ──
+    with abas[0]:
+        alunos = alunos_ativos(incluir_gestor=False)
+        if alunos.empty:
+            st.info("Nenhum aluno cadastrado.")
         else:
-            try:
-                executar(
-                    "INSERT INTO alunos (nome, email, senha, perfil, ativo, force_troca_senha) VALUES (?, ?, ?, 'Aluno', 1, 1)",
-                    (nome, email, hash_senha("123")),
-                )
-                limpar_cache()
-                _toast_sucesso("Aluno cadastrado com sucesso. Senha inicial: 123")
+            editado = st.data_editor(
+                alunos, use_container_width=True, hide_index=True,
+                disabled=["id", "perfil"], key="editor_alunos",
+            )
+            col1, col2 = st.columns([2, 1])
+            if col1.button("💾 Salvar alterações", type="primary"):
+                try:
+                    with conectar() as conn:
+                        for _, row in editado.iterrows():
+                            conn.execute(
+                                "UPDATE alunos SET nome = ?, email = ? WHERE id = ? AND perfil = 'Aluno'",
+                                (limpar_texto(row["nome"]), normalizar_email(row["email"]), int(row["id"])),
+                            )
+                    limpar_cache()
+                    _toast_sucesso("Dados dos alunos atualizados com sucesso.")
+                    st.rerun()
+                except (IntegrityError, UniqueViolation):
+                    st.error("Nome ou e-mail duplicado.")
+
+            st.markdown("---")
+            render_html('<div class="section-title">🗑️ Excluir aluno</div>')
+            render_html(
+                '<div class="rule-warning">'
+                '⚠️ A exclusão remove <strong>permanentemente</strong> o aluno e todo o seu histórico '
+                '(execuções, status, horas, acertos). Esta ação <strong>não pode ser desfeita</strong>.'
+                '</div>'
+            )
+            excluir_id = st.selectbox(
+                "Selecione o aluno a excluir",
+                alunos["id"].tolist(),
+                format_func=lambda v: f"{alunos.loc[alunos['id']==v,'nome'].iloc[0]} ({alunos.loc[alunos['id']==v,'email'].iloc[0]})",
+                key="sel_excluir_aluno",
+            )
+            nome_excluir = alunos.loc[alunos["id"] == excluir_id, "nome"].iloc[0]
+            confirmar = st.checkbox(
+                f"Confirmo que desejo excluir permanentemente o aluno **{nome_excluir}** e todos os seus dados.",
+                key="chk_excluir_aluno",
+            )
+            if st.button("🗑️ Excluir aluno", type="primary", disabled=not confirmar):
+                nome_removido = _excluir_aluno_cascade(excluir_id)
+                _toast_sucesso(f"Aluno '{nome_removido}' e todos os seus dados foram removidos com sucesso.")
                 st.rerun()
-            except (IntegrityError, UniqueViolation):
-                st.error("Já existe aluno com esse nome ou e-mail.")
 
-    alunos = alunos_ativos(incluir_gestor=False)
-    if alunos.empty:
-        st.info("Nenhum aluno cadastrado.")
-        return
-
-    editado = st.data_editor(alunos, use_container_width=True, hide_index=True, disabled=["id", "perfil"], key="editor_alunos")
-    col1, col2 = st.columns(2)
-    if col1.button("Salvar alterações de alunos", type="primary"):
-        try:
-            with conectar() as conn:
-                for _, row in editado.iterrows():
-                    conn.execute(
-                        "UPDATE alunos SET nome = ?, email = ? WHERE id = ? AND perfil = 'Aluno'",
-                        (limpar_texto(row["nome"]), normalizar_email(row["email"]), int(row["id"])),
+    # ── Aba 2: Novo aluno ──
+    with abas[1]:
+        with st.form("novo_aluno", clear_on_submit=True):
+            col1, col2 = st.columns(2)
+            nome  = col1.text_input("Nome")
+            email = col2.text_input("E-mail (opcional)")
+            salvar = st.form_submit_button("➕ Adicionar aluno", use_container_width=True)
+        if salvar:
+            nome  = limpar_texto(nome)
+            email = normalizar_email(email) or email_local(nome)
+            if not nome:
+                st.error("Informe o nome do aluno.")
+            else:
+                try:
+                    executar(
+                        "INSERT INTO alunos (nome, email, senha, perfil, ativo, force_troca_senha) VALUES (?, ?, ?, 'Aluno', 1, 1)",
+                        (nome, email, hash_senha("123")),
                     )
-            limpar_cache()
-            _toast_sucesso("Dados dos alunos atualizados com sucesso.")
-            st.rerun()
-        except (IntegrityError, UniqueViolation):
-            st.error("Nome ou e-mail duplicado.")
-    excluir_id = col2.selectbox(
-        "Excluir aluno", alunos["id"].tolist(),
-        format_func=lambda v: alunos.loc[alunos["id"] == v, "nome"].iloc[0],
-    )
-    if col2.button("Excluir aluno selecionado"):
-        executar("UPDATE alunos SET ativo = 0 WHERE id = ? AND perfil = 'Aluno'", (int(excluir_id),))
-        limpar_cache()
-        _toast_sucesso("Aluno excluído com sucesso.")
-        st.rerun()
+                    limpar_cache()
+                    _toast_sucesso(f"Aluno '{nome}' cadastrado com sucesso. Senha inicial: 123")
+                    st.rerun()
+                except (IntegrityError, UniqueViolation):
+                    st.error("Já existe um aluno com esse nome ou e-mail.")
+
+    # ── Aba 3: Limpeza de usuários ──
+    with abas[2]:
+        render_html(
+            '<div class="hero" style="margin-bottom:16px">'
+            '<h1 style="font-size:1.2rem">🧹 Limpeza de usuários</h1>'
+            '<p>Identifique e remova usuários duplicados, sem execuções ou indesejados. '
+            'Use os filtros abaixo para selecionar quem remover, confirme e execute a limpeza.</p>'
+            '</div>'
+        )
+
+        # Carrega TODOS os alunos (inclusive inativos) com contagem de execuções
+        todos = consultar("""
+            SELECT
+                a.id,
+                a.nome,
+                a.email,
+                a.perfil,
+                a.ativo,
+                COUNT(e.id) AS qtd_execucoes,
+                MAX(e.atualizado_em) AS ultima_atividade
+            FROM alunos a
+            LEFT JOIN execucoes e ON e.aluno_id = a.id
+            WHERE a.perfil = 'Aluno'
+            GROUP BY a.id, a.nome, a.email, a.perfil, a.ativo
+            ORDER BY a.ativo DESC, qtd_execucoes ASC, a.nome
+        """)
+
+        if todos.empty:
+            st.info("Nenhum aluno cadastrado.")
+        else:
+            # Métricas rápidas
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Total de alunos", len(todos))
+            c2.metric("Ativos", int(todos["ativo"].sum()))
+            c3.metric("Inativos", int((todos["ativo"] == 0).sum()))
+            c4.metric("Sem nenhuma execução", int((todos["qtd_execucoes"] == 0).sum()))
+
+            st.markdown("---")
+
+            # Filtros de seleção para limpeza
+            col_f1, col_f2 = st.columns(2)
+            mostrar_sem_exec = col_f1.checkbox("Mostrar apenas alunos sem execuções", value=False)
+            mostrar_inativos = col_f2.checkbox("Mostrar apenas alunos inativos", value=False)
+
+            df_view = todos.copy()
+            if mostrar_sem_exec:
+                df_view = df_view[df_view["qtd_execucoes"] == 0]
+            if mostrar_inativos:
+                df_view = df_view[df_view["ativo"] == 0]
+
+            if df_view.empty:
+                st.info("Nenhum aluno encontrado com os filtros aplicados.")
+            else:
+                st.dataframe(
+                    df_view.rename(columns={
+                        "id": "ID", "nome": "Nome", "email": "E-mail",
+                        "perfil": "Perfil", "ativo": "Ativo",
+                        "qtd_execucoes": "Execuções", "ultima_atividade": "Última atividade",
+                    }),
+                    use_container_width=True, hide_index=True,
+                )
+
+                st.markdown("---")
+                render_html('<div class="section-title">🗑️ Remover selecionados</div>')
+                render_html(
+                    '<div class="rule-warning">'
+                    '⚠️ A remoção exclui permanentemente o aluno e todos os seus dados de execução. '
+                    'Esta ação <strong>não pode ser desfeita</strong>. Revise a lista acima antes de confirmar.'
+                    '</div>'
+                )
+
+                ids_disponiveis = df_view["id"].tolist()
+                nomes_map = dict(zip(df_view["id"], df_view["nome"]))
+
+                ids_remover = st.multiselect(
+                    "Selecione os alunos a remover",
+                    ids_disponiveis,
+                    format_func=lambda v: f"{nomes_map.get(v,'?')} — {int(df_view.loc[df_view['id']==v,'qtd_execucoes'].iloc[0])} execuções",
+                    key="ms_limpar_alunos",
+                )
+
+                if ids_remover:
+                    nomes_selecionados = [nomes_map.get(i, str(i)) for i in ids_remover]
+                    confirmar_limpeza = st.checkbox(
+                        f"Confirmo a remoção de {len(ids_remover)} aluno(s): {', '.join(nomes_selecionados)}",
+                        key="chk_limpar_alunos",
+                    )
+                    if st.button("🧹 Executar limpeza", type="primary", disabled=not confirmar_limpeza):
+                        removidos = []
+                        erros = []
+                        for aid in ids_remover:
+                            try:
+                                nome_rem = _excluir_aluno_cascade(aid)
+                                removidos.append(nome_rem)
+                            except Exception as exc:
+                                erros.append(f"{nomes_map.get(aid,'?')}: {exc}")
+                        if removidos:
+                            _toast_sucesso(f"{len(removidos)} aluno(s) removido(s) com sucesso: {', '.join(removidos)}.")
+                        if erros:
+                            for e in erros:
+                                st.error(f"Erro ao remover: {e}")
+                        st.rerun()
+
+                st.markdown("---")
+                render_html('<div class="section-title">⚡ Limpeza rápida</div>')
+                col_r1, col_r2 = st.columns(2)
+                with col_r1:
+                    st.caption("Remove todos os alunos **sem nenhuma execução** registrada.")
+                    sem_exec_ids = todos[todos["qtd_execucoes"] == 0]["id"].tolist()
+                    if sem_exec_ids:
+                        conf_sem_exec = st.checkbox(
+                            f"Confirmo remoção de {len(sem_exec_ids)} aluno(s) sem execuções",
+                            key="chk_sem_exec",
+                        )
+                        if st.button("🗑️ Remover sem execuções", disabled=not conf_sem_exec, key="btn_sem_exec"):
+                            for aid in sem_exec_ids:
+                                _excluir_aluno_cascade(aid)
+                            _toast_sucesso(f"{len(sem_exec_ids)} aluno(s) sem execuções removidos com sucesso.")
+                            st.rerun()
+                    else:
+                        st.success("Nenhum aluno sem execuções.")
+
+                with col_r2:
+                    st.caption("Remove todos os alunos com status **inativo** (`ativo = 0`).")
+                    inativos_ids = todos[todos["ativo"] == 0]["id"].tolist()
+                    if inativos_ids:
+                        conf_inativos = st.checkbox(
+                            f"Confirmo remoção de {len(inativos_ids)} aluno(s) inativo(s)",
+                            key="chk_inativos",
+                        )
+                        if st.button("🗑️ Remover inativos", disabled=not conf_inativos, key="btn_inativos"):
+                            for aid in inativos_ids:
+                                _excluir_aluno_cascade(aid)
+                            _toast_sucesso(f"{len(inativos_ids)} aluno(s) inativo(s) removidos com sucesso.")
+                            st.rerun()
+                    else:
+                        st.success("Nenhum aluno inativo.")
 
 
 # ─────────────────────────────────────────────
