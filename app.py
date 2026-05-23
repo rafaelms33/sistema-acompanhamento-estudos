@@ -1396,14 +1396,33 @@ def importar_ciclo_consolidado(caminho_excel, modo: str = "substituir") -> dict:
     try:
         with conectar() as conn:
             for nome in [nome_aluno_a, nome_aluno_b]:
-                conn.execute(
-                    """
-                    INSERT INTO alunos (nome, email, senha, perfil, ativo, force_troca_senha)
-                    VALUES (?, ?, ?, 'Aluno', 1, 1)
-                    ON CONFLICT(nome) DO UPDATE SET ativo = 1
-                    """,
-                    (nome, email_local(nome), hash_senha("123")),
-                )
+                # Verifica se já existe pelo nome antes de tentar inserir,
+                # evitando conflito de unique no email em PostgreSQL.
+                ja_existe = conn.execute(
+                    "SELECT id FROM alunos WHERE nome = ?", (nome,)
+                ).fetchone()
+                if ja_existe:
+                    # Apenas reativa se estiver inativo
+                    conn.execute(
+                        "UPDATE alunos SET ativo = 1 WHERE nome = ?", (nome,)
+                    )
+                else:
+                    # Gera email e verifica se também já está em uso
+                    email = email_local(nome)
+                    email_em_uso = conn.execute(
+                        "SELECT id FROM alunos WHERE email = ?", (email,)
+                    ).fetchone()
+                    if email_em_uso:
+                        # Usa email alternativo com sufixo numérico
+                        import time as _time
+                        email = f"{email_local(nome).split('@')[0]}_{int(_time.time()) % 10000}@local.com"
+                    conn.execute(
+                        """
+                        INSERT INTO alunos (nome, email, senha, perfil, ativo, force_troca_senha)
+                        VALUES (?, ?, ?, 'Aluno', 1, 1)
+                        """,
+                        (nome, email, hash_senha("123")),
+                    )
 
             id_a = conn.execute("SELECT id FROM alunos WHERE nome = ?", (nome_aluno_a,)).fetchone()[0]
             id_b = conn.execute("SELECT id FROM alunos WHERE nome = ?", (nome_aluno_b,)).fetchone()[0]
