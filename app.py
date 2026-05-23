@@ -1092,7 +1092,15 @@ def upsert_execucao(
 # IMPORTADORES
 # ─────────────────────────────────────────────
 
-def importar_planilha_referencia(caminho=PLANILHA_REFERENCIA, substituir=True):
+def importar_planilha_referencia(caminho=PLANILHA_REFERENCIA, substituir=False):
+    """
+    Importa a planilha de referência (disciplinas, aulas, assuntos, tarefas).
+
+    NUNCA apaga execuções existentes.
+    Apenas insere ou atualiza estrutura (disciplinas, aulas, assuntos, tarefas).
+    Execuções já existentes (status, datas, horas, acertos) são preservadas.
+    O parâmetro `substituir` foi mantido por compatibilidade mas não apaga execuções.
+    """
     caminho = Path(caminho)
     if not caminho.exists():
         st.error(f"Planilha não encontrada: {caminho}")
@@ -1109,24 +1117,26 @@ def importar_planilha_referencia(caminho=PLANILHA_REFERENCIA, substituir=True):
     abas_ignoradas = {"Tutorial", "Estatísticas", "Tarefas"}
     try:
         with conectar() as conn:
-            if substituir:
-                conn.execute("DELETE FROM execucoes")
-                conn.execute("DELETE FROM tarefas")
-                conn.execute("DELETE FROM assuntos")
-                conn.execute("DELETE FROM aulas")
-                conn.execute("DELETE FROM disciplinas")
-
+            # ── Estrutura: disciplinas, aulas, assuntos ──
+            # Nunca apaga. Apenas insere novos ou reactiva inativados.
             for aba in xl.sheet_names:
                 if aba in abas_ignoradas:
                     continue
-                raw = pd.read_excel(caminho, sheet_name=aba, header=None, nrows=1)
-                nome_disciplina = limpar_texto(raw.iloc[0, 0]) or aba
+                try:
+                    raw = pd.read_excel(caminho, sheet_name=aba, header=None, nrows=1)
+                    nome_disciplina = limpar_texto(raw.iloc[0, 0]) or aba
+                except Exception:
+                    nome_disciplina = aba
                 disciplina_id = upsert_disciplina(conn, nome_disciplina)
-                aulas_df = pd.read_excel(caminho, sheet_name=aba, header=1).dropna(how="all")
+
+                try:
+                    aulas_df = pd.read_excel(caminho, sheet_name=aba, header=1).dropna(how="all")
+                except Exception:
+                    continue
                 if "Aula" not in aulas_df.columns or "Assunto" not in aulas_df.columns:
                     continue
                 for _, row in aulas_df.iterrows():
-                    aula = limpar_texto(row.get("Aula"))
+                    aula    = limpar_texto(row.get("Aula"))
                     assunto = limpar_texto(row.get("Assunto"))
                     if not aula or not assunto:
                         continue
@@ -1137,34 +1147,35 @@ def importar_planilha_referencia(caminho=PLANILHA_REFERENCIA, substituir=True):
                     )
                     upsert_assunto(conn, aula_id, assunto)
 
+            # ── Tarefas: upsert seguro — não toca em execuções ──
             tarefas = pd.read_excel(caminho, sheet_name="Tarefas", header=2).dropna(how="all")
             for _, row in tarefas.iterrows():
-                numero = converter_inteiro(row.get("Tarefa"))
+                numero     = converter_inteiro(row.get("Tarefa"))
                 disciplina = limpar_texto(row.get("Disciplina"))
                 if not numero or not disciplina:
                     continue
                 disciplina_id = upsert_disciplina(conn, disciplina)
-                aula_valor = str(limpar_texto(row.get("Aula")) or "Aula não informada")
-                aula_id = upsert_aula(conn, disciplina_id, aula_valor)
-                assunto_id = upsert_assunto(conn, aula_id, limpar_texto(row.get("Conteúdo")))
-                tipo = normalizar_tipo_estudo(row.get("Tipo"))
+                aula_valor    = str(limpar_texto(row.get("Aula")) or "Aula não informada")
+                aula_id       = upsert_aula(conn, disciplina_id, aula_valor)
+                assunto_id    = upsert_assunto(conn, aula_id, limpar_texto(row.get("Conteúdo")))
+                tipo          = normalizar_tipo_estudo(row.get("Tipo"))
                 conn.execute(
                     """
                     INSERT INTO tarefas
-                        (numero, trilha, disciplina_id, seq_disciplina, aula, qtd_exercicios_previstos,
-                         tipo, conteudo, ativo, aula_id, assunto_id)
+                        (numero, trilha, disciplina_id, seq_disciplina, aula,
+                         qtd_exercicios_previstos, tipo, conteudo, ativo, aula_id, assunto_id)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
                     ON CONFLICT(numero) DO UPDATE SET
-                        trilha = excluded.trilha,
-                        disciplina_id = excluded.disciplina_id,
-                        seq_disciplina = excluded.seq_disciplina,
-                        aula = excluded.aula,
-                        qtd_exercicios_previstos = excluded.qtd_exercicios_previstos,
-                        tipo = excluded.tipo,
-                        conteudo = excluded.conteudo,
-                        ativo = 1,
-                        aula_id = excluded.aula_id,
-                        assunto_id = excluded.assunto_id
+                        trilha                  = excluded.trilha,
+                        disciplina_id           = excluded.disciplina_id,
+                        seq_disciplina          = excluded.seq_disciplina,
+                        aula                    = excluded.aula,
+                        qtd_exercicios_previstos= excluded.qtd_exercicios_previstos,
+                        tipo                    = excluded.tipo,
+                        conteudo                = excluded.conteudo,
+                        ativo                   = 1,
+                        aula_id                 = excluded.aula_id,
+                        assunto_id              = excluded.assunto_id
                     """,
                     (
                         numero,
@@ -2159,6 +2170,11 @@ def _aba_visao_geral(df_filtrado, analisavel):
     status_df["label"] = status_df["status"].map(STATUS_LABELS)
     col_a, col_b = st.columns(2)
     with col_a:
+        render_html(_tooltip_grafico(
+            "Barras verticais mostrando quantas tarefas estão em cada status. "
+            "Não iniciada = fila pendente · Em andamento = em execução · Concluída = finalizada. "
+            "Quanto mais barras verdes, melhor o avanço geral."
+        ))
         fig = go.Figure(go.Bar(
             x=status_df["label"], y=status_df["qtd"],
             marker_color=[STATUS_CORES.get(s,"#94a3b8") for s in status_df["status"]],
@@ -2170,6 +2186,10 @@ def _aba_visao_geral(df_filtrado, analisavel):
             pa = analisavel.groupby("aluno", as_index=False).agg(
                 horas=("ch_efetiva","sum"), concluidas=("status", lambda s:(s==STATUS_CONCLUIDA).sum())
             ).sort_values("horas", ascending=True)
+            render_html(_tooltip_grafico(
+                "Barras horizontais agrupadas comparando horas estudadas e tarefas concluídas por aluno. "
+                "Ideal para identificar quem está mais ativo e quem está concluindo mais atividades."
+            ))
             fig = go.Figure()
             fig.add_trace(go.Bar(name="Horas", y=pa["aluno"], x=pa["horas"], orientation="h", marker_color="#3b82f6"))
             fig.add_trace(go.Bar(name="Concluídas", y=pa["aluno"], x=pa["concluidas"], orientation="h", marker_color="#22c55e"))
@@ -2191,6 +2211,11 @@ def _aba_disciplinas(analisavel):
     disc["desempenho"] = disc.apply(lambda r: r["acertos"]/r["questoes"]*100 if r["questoes"] else 0, axis=1)
     col_a, col_b = st.columns(2)
     with col_a:
+        render_html(_tooltip_grafico(
+            "Barra horizontal mostrando o % de tarefas concluídas por disciplina. "
+            "Verde ≥ 80% · Amarelo 40–79% · Vermelho < 40%. "
+            "Fórmula: (tarefas concluídas ÷ total de tarefas) × 100."
+        ))
         d = disc.sort_values("progresso")
         fig = go.Figure(go.Bar(
             x=d["progresso"], y=d["disciplina"], orientation="h",
@@ -2200,6 +2225,11 @@ def _aba_disciplinas(analisavel):
         fig.update_layout(title="Progresso por disciplina (%)")
         st.plotly_chart(fig_layout(fig, max(280, len(disc)*36)), use_container_width=True)
     with col_b:
+        render_html(_tooltip_grafico(
+            "Barras = horas estudadas (eixo esquerdo). "
+            "Linha = taxa de acerto em questões, eixo direito (0–100%). "
+            "Disciplinas com muitas horas e baixo desempenho indicam estudo ineficiente."
+        ))
         fig = go.Figure()
         fig.add_trace(go.Bar(name="Horas", x=disc["disciplina"], y=disc["horas"], marker_color="#3b82f6"))
         fig.add_trace(go.Scatter(name="Desempenho (%)", x=disc["disciplina"], y=disc["desempenho"],
@@ -2207,6 +2237,11 @@ def _aba_disciplinas(analisavel):
         fig.update_layout(title="Horas × Desempenho", yaxis2=dict(overlaying="y", side="right", range=[0,100]))
         st.plotly_chart(fig_layout(fig, 300), use_container_width=True)
     if len(disc) >= 3:
+        render_html(_tooltip_grafico(
+            "Radar comparando a taxa de acerto (%) de cada disciplina. "
+            "Disciplinas mais distantes do centro têm melhor desempenho. "
+            "Áreas retraídas indicam onde concentrar esforços de revisão."
+        ))
         fig_r = go.Figure(go.Scatterpolar(
             r=disc["desempenho"].tolist()+[disc["desempenho"].tolist()[0]],
             theta=disc["disciplina"].tolist()+[disc["disciplina"].tolist()[0]],
@@ -2228,6 +2263,11 @@ def _aba_evolucao(analisavel):
     diario = evo.groupby("dia", as_index=False).agg(horas=("ch_efetiva","sum"), tarefas=("tarefa_id","count"))
     diario["dia_ts"] = pd.to_datetime(diario["dia"])
     diario["media7"] = diario["horas"].rolling(7, min_periods=1).mean()
+    render_html(_tooltip_grafico(
+        "Barras = horas estudadas por dia. Linha pontilhada = média móvel dos últimos 7 dias. "
+        "A média móvel suaviza oscilações e revela a tendência real do ritmo de estudo. "
+        "Quando a média sobe: ritmo crescente. Quando desce: possível desaceleração."
+    ))
     fig = go.Figure()
     fig.add_trace(go.Bar(x=diario["dia_ts"], y=diario["horas"], name="Horas/dia", marker_color="#3b82f6", opacity=0.7))
     fig.add_trace(go.Scatter(x=diario["dia_ts"], y=diario["media7"], name="Média 7 dias", mode="lines", line=dict(color="#f59e0b", width=2, dash="dot")))
@@ -2238,6 +2278,10 @@ def _aba_evolucao(analisavel):
         sem = evo.set_index("data_ref").resample("W").agg(horas=("ch_efetiva","sum"), concluidas=("status", lambda s:(s==STATUS_CONCLUIDA).sum())).reset_index()
         sem["label"] = sem["data_ref"].dt.strftime("Sem %d/%m")
         if not sem.empty:
+            render_html(_tooltip_grafico(
+                "Barras = horas por semana. Linha = tarefas concluídas na mesma semana (eixo direito). "
+                "Permite ver se semanas com mais horas resultam em mais conclusões — ou se há problema de eficiência."
+            ))
             fig2 = go.Figure()
             fig2.add_trace(go.Bar(x=sem["label"], y=sem["horas"], name="Horas", marker_color="#3b82f6"))
             fig2.add_trace(go.Scatter(x=sem["label"], y=sem["concluidas"], name="Concluídas", mode="lines+markers", yaxis="y2", marker_color="#22c55e", line=dict(width=2)))
@@ -2253,6 +2297,11 @@ def _aba_evolucao(analisavel):
         ds = ds.sort_values("dia_semana")
         ds["label"] = ds["dia_semana"].map(labels_dias)
         if not ds.empty:
+            render_html(_tooltip_grafico(
+                "Horas totais acumuladas em cada dia da semana ao longo de todo o período. "
+                "A barra verde destaca o dia com mais horas — provavelmente o dia de maior rendimento. "
+                "Útil para planejar os dias de estudo mais intenso."
+            ))
             fig3 = go.Figure(go.Bar(
                 x=ds["label"], y=ds["horas"],
                 marker_color=["#22c55e" if h==ds["horas"].max() else "#3b82f6" for h in ds["horas"]],
@@ -2268,6 +2317,11 @@ def _aba_gestao_tempo(analisavel):
     with col_a:
         tipos = analisavel.groupby("tipo", as_index=False).agg(horas=("ch_efetiva","sum"))
         tipos = tipos[tipos["horas"]>0].sort_values("horas", ascending=False)
+        render_html(_tooltip_grafico(
+            "Pizza mostrando como as horas de estudo estão distribuídas entre os diferentes tipos de atividade "
+            "(Leitura, Exercícios, Revisão, Videoaula etc.). "
+            "Ideal para identificar se há desequilíbrio — ex: muita teoria e pouca prática."
+        ))
         fig = px.pie(tipos, names="tipo", values="horas", color_discrete_sequence=px.colors.qualitative.Set3)
         fig.update_traces(textposition="inside", textinfo="percent+label")
         fig.update_layout(title="Distribuição por tipo de estudo", showlegend=False)
@@ -2276,6 +2330,11 @@ def _aba_gestao_tempo(analisavel):
         bd = analisavel.groupby("disciplina", as_index=False).agg(horas=("ch_efetiva","sum")).sort_values("horas", ascending=True)
         tot = bd["horas"].sum() or 1
         bd["pct"] = bd["horas"]/tot*100
+        render_html(_tooltip_grafico(
+            "Barras horizontais com horas acumuladas por disciplina. "
+            "O % indica a proporção de cada disciplina no tempo total de estudo. "
+            "Disciplinas com % muito baixo podem estar sendo negligenciadas."
+        ))
         fig2 = go.Figure(go.Bar(x=bd["horas"], y=bd["disciplina"], orientation="h",
             text=bd["pct"].map(lambda v: f"{v:.0f}%"), textposition="outside", marker_color="#3b82f6"))
         fig2.update_layout(title="Horas por disciplina")
@@ -2286,6 +2345,11 @@ def _aba_gestao_tempo(analisavel):
         ef["eficiencia"] = ef["questoes"]/ef["horas"]
         ef = ef.sort_values("eficiencia", ascending=False)
         if not ef.empty:
+            render_html(_tooltip_grafico(
+                "Quantas questões são feitas por hora em cada tipo de atividade. "
+                "Fórmula: questões feitas ÷ horas de estudo. "
+                "A barra verde destaca o tipo mais eficiente em volume de prática."
+            ))
             fig3 = go.Figure(go.Bar(x=ef["tipo"], y=ef["eficiencia"],
                 text=ef["eficiencia"].map(lambda v: f"{v:.1f}"), textposition="outside",
                 marker_color=["#22c55e" if v==ef["eficiencia"].max() else "#3b82f6" for v in ef["eficiencia"]]))
@@ -2394,6 +2458,73 @@ def _aba_analise_ia(df_filtrado, visao, kpis):
 # TELA: DASHBOARD
 # ─────────────────────────────────────────────
 
+def _tooltip_grafico(texto: str) -> str:
+    """Retorna HTML de um ícone ? com tooltip flutuante para gráficos."""
+    return (
+        f'<div class="kpi-ttip-wrap" style="display:inline-block;margin-left:6px;vertical-align:middle">'
+        f'<div class="kpi-ttip-icon">?</div>'
+        f'<div class="kpi-ttip-box">{escape_html(texto)}</div>'
+        f'</div>'
+    )
+
+
+def _titulo_secao(label: str, tooltip: str = "", periodo: str = "") -> None:
+    badge = ""
+    if periodo:
+        cor   = "#eff6ff" if "7" in periodo else "#f0fdf4"
+        borda = "#bfdbfe" if "7" in periodo else "#bbf7d0"
+        txt   = "#1d4ed8" if "7" in periodo else "#166534"
+        badge = (
+            f'<span style="background:{cor};color:{txt};border:1px solid {borda};'
+            f'border-radius:999px;padding:2px 10px;font-size:.67rem;font-weight:800;'
+            f'margin-left:8px;vertical-align:middle">{periodo}</span>'
+        )
+    tip = _tooltip_grafico(tooltip) if tooltip else ""
+    render_html(
+        f'<div style="font-size:.88rem;font-weight:800;color:#0f172a;margin:18px 0 6px;'
+        f'display:flex;align-items:center;gap:4px">'
+        f'{escape_html(label)}{badge}{tip}</div>'
+    )
+
+
+def _resumo_7dias(df_total: pd.DataFrame) -> None:
+    """Bloco de KPIs dos últimos 7 dias com labels e tooltips."""
+    hoje   = date.today()
+    ini7   = hoje - timedelta(days=6)
+    df7    = df_total[df_total["data_ref"].dt.date >= ini7].copy()
+    ana7   = df7[df7["status"].isin(STATUS_ANALISE)]
+
+    h7     = float(ana7["ch_efetiva"].sum())
+    q7     = int(ana7["qtd_questoes_feitas"].sum())
+    ac7    = int(ana7["qtd_acertos"].sum())
+    des7   = ac7 / q7 * 100 if q7 else 0
+    conc7  = int((ana7["status"] == STATUS_CONCLUIDA).sum())
+    dias7  = ana7["data_ref"].dropna().dt.date.nunique()
+
+    _titulo_secao(
+        "Últimos 7 dias",
+        "Indicadores calculados apenas com execuções dos últimos 7 dias (hoje inclusive). "
+        "Útil para monitorar o ritmo recente independente do histórico total.",
+        "Últimos 7 dias",
+    )
+    cols = st.columns(5)
+    cards = [
+        kpi_card("Horas estudadas", f"{h7:.1f}h", f"{dias7} dia(s) com registro",
+            tooltip="Total de horas de estudo registradas nos últimos 7 dias. Inclui atividades Em andamento e Concluídas."),
+        kpi_card("Questões feitas", f"{q7}", "nos últimos 7 dias",
+            tooltip="Soma de todas as questões resolvidas em atividades iniciadas ou concluídas nos últimos 7 dias."),
+        kpi_card("Acertos", f"{ac7}", f"de {q7} questões",
+            tooltip="Total de questões acertadas nos últimos 7 dias. Fórmula: soma de qtd_acertos das execuções do período."),
+        kpi_card("Desempenho", f"{des7:.1f}%", "taxa de acerto (7d)",
+            tooltip="Taxa de acerto nos últimos 7 dias. Fórmula: (acertos ÷ questões) × 100. Acima de 70% é satisfatório para concursos."),
+        kpi_card("Tarefas concluídas", f"{conc7}", "nos últimos 7 dias",
+            tooltip="Quantidade de tarefas marcadas como Concluída com data de execução nos últimos 7 dias."),
+    ]
+    for col, card in zip(cols, cards):
+        with col:
+            render_html(card)
+
+
 def dashboard():
     render_html(f"""
         <div class="hero">
@@ -2412,31 +2543,96 @@ def dashboard():
         return
 
     df_filtrado = df_filtrado.copy()
-    df_filtrado["data_ref"] = pd.to_datetime(df_filtrado.get("data_execucao", pd.Series(dtype=str)), errors="coerce")
-    kpis = calcular_kpis_avancados(df_filtrado)
+    df_filtrado["data_ref"] = pd.to_datetime(
+        df_filtrado.get("data_execucao", pd.Series(dtype=str)), errors="coerce"
+    )
+    kpis       = calcular_kpis_avancados(df_filtrado)
     analisavel = kpis["analisavel"]
-    st.caption("📌 Passe o mouse sobre ? para ver fórmula e interpretação de cada indicador. Considera atividades Em andamento e Concluídas.")
 
-    render_html('<div class="section-title">⚡ Produtividade</div>')
-    _render_kpis_produtividade(kpis)
-    render_html('<div class="section-title">📈 Avanço no plano</div>')
-    _render_kpis_avanco(kpis)
-    render_html('<div class="section-title">🎯 Desempenho</div>')
-    _render_kpis_desempenho(kpis)
+    st.caption(
+        "📌 Passe o mouse sobre ? para ver fórmula e interpretação. "
+        "Indicadores em azul = últimos 7 dias · Verde = histórico completo."
+    )
+
+    # ── Bloco 7 dias ──
+    _resumo_7dias(df_filtrado)
+
     st.markdown("---")
 
-    abas = st.tabs(["📊 Visão geral","📚 Disciplinas","📅 Evolução","⏱️ Gestão do tempo","🏆 Rankings","🧠 Análise IA","📋 Atividades"])
+    # ── Bloco histórico ──
+    _titulo_secao(
+        "Histórico completo",
+        "Indicadores calculados sobre todo o período disponível nos filtros selecionados.",
+        "Histórico completo",
+    )
+    _render_kpis_produtividade(kpis)
 
-    with abas[0]: _aba_visao_geral(df_filtrado, analisavel)
-    with abas[1]: _aba_disciplinas(analisavel)
-    with abas[2]: _aba_evolucao(analisavel)
-    with abas[3]: _aba_gestao_tempo(analisavel)
-    with abas[4]: _aba_ranking(analisavel)
-    with abas[5]: _aba_analise_ia(df_filtrado, visao, kpis)
+    _titulo_secao("Avanço no plano",
+        "Métricas de progresso em relação ao total de tarefas do plano de estudos.", "Histórico completo")
+    _render_kpis_avanco(kpis)
+
+    _titulo_secao("Desempenho acadêmico",
+        "Indicadores de performance nas questões e tarefas concluídas.", "Histórico completo")
+    _render_kpis_desempenho(kpis)
+
+    st.markdown("---")
+
+    abas = st.tabs([
+        "📊 Visão geral",
+        "📚 Disciplinas",
+        "📅 Evolução",
+        "⏱️ Gestão do tempo",
+        "🏆 Rankings",
+        "🧠 Análise IA",
+        "📋 Atividades",
+    ])
+
+    with abas[0]:
+        _titulo_secao("Distribuição por status",
+            "Quantas tarefas estão em cada status (Não iniciada, Em andamento, Concluída). "
+            "Permite visualizar a fila de trabalho e o progresso geral.")
+        _aba_visao_geral(df_filtrado, analisavel)
+
+    with abas[1]:
+        _titulo_secao("Análise por disciplina",
+            "Progresso e desempenho separados por disciplina. "
+            "Identifica quais áreas estão avançando bem e quais precisam de mais atenção.")
+        _aba_disciplinas(analisavel)
+
+    with abas[2]:
+        _titulo_secao("Evolução temporal",
+            "Gráficos de horas e conclusões ao longo do tempo. "
+            "Mostra tendência de crescimento, constância e variações no ritmo de estudo.")
+        _aba_evolucao(analisavel)
+
+    with abas[3]:
+        _titulo_secao("Gestão do tempo",
+            "Como as horas de estudo estão distribuídas entre tipos de atividade e disciplinas. "
+            "Ajuda a identificar desequilíbrios e priorizar melhor o tempo disponível.")
+        _aba_gestao_tempo(analisavel)
+
+    with abas[4]:
+        _titulo_secao("Rankings comparativos",
+            "Classificação dos alunos por produtividade, consistência e desempenho. "
+            "Cada ranking usa uma métrica diferente para uma visão multidimensional.")
+        _aba_ranking(analisavel)
+
+    with abas[5]:
+        _titulo_secao("Análise inteligente por aluno",
+            "Insights automáticos gerados com base no histórico individual: padrões, riscos, disciplinas frágeis e recomendações.")
+        _aba_analise_ia(df_filtrado, visao, kpis)
+
     with abas[6]:
-        tabela = preparar_tabela(df_filtrado)
-        colunas = ["aluno","tarefa","disciplina","aula","assunto","tipo","status_label","data_execucao","ch_efetiva","qtd_questoes_feitas","qtd_acertos","desempenho","comentario"]
-        st.dataframe(tabela[[c for c in colunas if c in tabela.columns]], use_container_width=True, hide_index=True, row_height=72)
+        _titulo_secao("Todas as atividades",
+            "Tabela detalhada com todos os registros de execução do período filtrado. "
+            "Útil para auditoria e acompanhamento granular.")
+        tabela  = preparar_tabela(df_filtrado)
+        colunas = ["aluno","tarefa","disciplina","aula","assunto","tipo","status_label",
+                   "data_execucao","ch_efetiva","qtd_questoes_feitas","qtd_acertos","desempenho","comentario"]
+        st.dataframe(
+            tabela[[c for c in colunas if c in tabela.columns]],
+            use_container_width=True, hide_index=True, row_height=72,
+        )
 
 
 # ─────────────────────────────────────────────
@@ -3308,18 +3504,32 @@ def tela_importacao():
 
     # ── Aba 1: Planilha de referência ──
     with abas[0]:
+        render_html("""
+            <div class="insight-card info" style="margin-bottom:12px">
+              <div class="insight-icon">🛡️</div>
+              <div class="insight-body">
+                <div class="insight-title">Importação segura — histórico preservado</div>
+                <p class="insight-text">
+                  A importação da planilha de referência <strong>nunca apaga execuções existentes</strong>.
+                  Apenas insere novas disciplinas, aulas, assuntos e tarefas que ainda não existam,
+                  ou atualiza campos de estrutura (trilha, tipo, exercícios previstos).
+                  Status, datas, horas e acertos já registrados são sempre preservados.
+                </p>
+              </div>
+            </div>
+        """)
         st.caption(f"Planilha de referência padrão: `{PLANILHA_REFERENCIA}`")
         arquivo = st.file_uploader("Planilha referência (.xlsx)", type=["xlsx"], key="ref_upload")
         if arquivo is not None:
             destino = BASE_DIR / "planilha_referencia_importada.xlsx"
             destino.write_bytes(arquivo.getbuffer())
             if st.button("Importar referência enviada", type="primary", key="ref_envio"):
-                if importar_planilha_referencia(destino, substituir=True):
-                    _toast_sucesso("Planilha de referência importada com sucesso.")
+                if importar_planilha_referencia(destino):
+                    _toast_sucesso("Planilha de referência importada com sucesso. Histórico preservado.")
                     st.rerun()
         elif st.button("Reimportar referência padrão", key="ref_padrao"):
-            if importar_planilha_referencia(PLANILHA_REFERENCIA, substituir=True):
-                _toast_sucesso("Planilha de referência padrão importada com sucesso.")
+            if importar_planilha_referencia(PLANILHA_REFERENCIA):
+                _toast_sucesso("Planilha de referência padrão importada com sucesso. Histórico preservado.")
                 st.rerun()
 
         st.markdown("---")
