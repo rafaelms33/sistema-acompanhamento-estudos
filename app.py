@@ -1790,7 +1790,7 @@ def painel_filtros(df, prefixo="dash"):
                 "disciplina": disciplina, "aula": aula, "assunto": assunto,
                 "tipo": tipo, "min_horas": minimo_horas, "recentes": recentes,
             }
-            st.success("Filtro salvo.")
+            _toast_sucesso("Filtro salvo como favorito.")
 
     filtrado = df.copy()
     filtrado["data_ref"] = pd.to_datetime(filtrado["data_execucao"], errors="coerce")
@@ -2080,7 +2080,7 @@ def tela_troca_obrigatoria():
             atualizar_senha_usuario(usuario["id"], nova, 0)
             usuario_atualizado = consultar("SELECT * FROM alunos WHERE id = ?", (int(usuario["id"]),))
             st.session_state["usuario"] = usuario_atualizado.iloc[0].to_dict()
-            st.success("Senha alterada com sucesso.")
+            _toast_sucesso("Senha alterada com sucesso. Faça login novamente.")
             st.rerun()
 
 
@@ -2982,7 +2982,7 @@ def tela_tarefas():
                             row["status"], row["tipo"],
                         )
                 limpar_cache()
-                st.success("Status e registros atualizados.")
+                _toast_sucesso("Registros de execução salvos com sucesso.")
                 st.rerun()
             except Exception as exc:
                 erro_usuario("Não foi possível salvar.", exc)
@@ -3021,7 +3021,7 @@ def tela_tarefas():
                         for av in alunos_vinc:
                             upsert_execucao(conn, int(av), tarefa_id, None, 0, None, 0, 0, None, 0, STATUS_NAO_INICIADA)
                     limpar_cache()
-                    st.success("Tarefa criada.")
+                    _toast_sucesso("Tarefa criada com sucesso.")
                     st.rerun()
                 except (IntegrityError, UniqueViolation):
                     st.error("Já existe uma tarefa com esse número.")
@@ -3055,13 +3055,13 @@ def tela_tarefas():
                             (int(row["tarefa"]), converter_inteiro(row["trilha"]), row["tipo"], converter_inteiro(row["qtd_exercicios_previstos"]), limpar_texto(row["conteudo"]), int(row["tarefa_id"])),
                         )
                 limpar_cache()
-                st.success("Tarefas atualizadas.")
+                _toast_sucesso("Alterações nas tarefas salvas com sucesso.")
                 st.rerun()
             excluir = col2.selectbox("Excluir tarefa", tarefas["tarefa_id"].tolist(), format_func=lambda v: f"Tarefa {int(tarefas.loc[tarefas['tarefa_id'] == v, 'tarefa'].iloc[0])}")
             if col2.button("Excluir tarefa selecionada"):
                 executar("UPDATE tarefas SET ativo = 0 WHERE id = ?", (int(excluir),))
                 limpar_cache()
-                st.success("Tarefa excluída.")
+                _toast_sucesso("Tarefa excluída com sucesso.")
                 st.rerun()
 
     # ── Aba 4: Vincular alunos ──
@@ -3081,7 +3081,7 @@ def tela_tarefas():
                     for av in vincular:
                         upsert_execucao(conn, int(av), int(tarefa_id), None, 0, None, 0, 0, None, 0, STATUS_NAO_INICIADA)
                 limpar_cache()
-                st.success("Vínculos atualizados.")
+                _toast_sucesso("Alunos vinculados à tarefa com sucesso.")
                 st.rerun()
 
 
@@ -3112,7 +3112,7 @@ def tela_aulas():
                     with conectar() as conn:
                         upsert_aula(conn, disciplina_id, aula, tipo_estudo=tipo_estudo)
                     limpar_cache()
-                    st.success("Aula criada.")
+                    _toast_sucesso("Aula criada com sucesso.")
                     st.rerun()
 
         if aulas.empty:
@@ -3134,13 +3134,13 @@ def tela_aulas():
                                 (limpar_texto(row["aula"]), normalizar_tipo_estudo(row["tipo_estudo"]), limpar_texto(row["estudada_padrao"]), limpar_texto(row["revisao_24h_padrao"]), int(row["id"])),
                             )
                     limpar_cache()
-                    st.success("Aulas atualizadas.")
+                    _toast_sucesso("Alterações nas aulas salvas com sucesso.")
                     st.rerun()
                 excluir = col2.selectbox("Excluir aula", aulas["id"].tolist(), format_func=lambda v: aulas.loc[aulas["id"] == v, "aula"].iloc[0])
                 if col2.button("Excluir aula selecionada"):
                     executar("UPDATE aulas SET ativo = 0 WHERE id = ?", (int(excluir),))
                     limpar_cache()
-                    st.success("Aula excluída.")
+                    _toast_sucesso("Aula excluída com sucesso.")
                     st.rerun()
 
     with abas[1]:
@@ -3159,7 +3159,7 @@ def tela_aulas():
                     with conectar() as conn:
                         upsert_assunto(conn, aula_id, titulo)
                     limpar_cache()
-                    st.success("Assunto criado.")
+                    _toast_sucesso("Assunto criado com sucesso.")
                     st.rerun()
 
         if assuntos.empty:
@@ -3177,13 +3177,13 @@ def tela_aulas():
                         for _, row in editado.iterrows():
                             conn.execute("UPDATE assuntos SET titulo = ? WHERE id = ?", (limpar_texto(row["assunto"]), int(row["id"])))
                     limpar_cache()
-                    st.success("Assuntos atualizados.")
+                    _toast_sucesso("Alterações nos assuntos salvas com sucesso.")
                     st.rerun()
                 excluir = col2.selectbox("Excluir assunto", assuntos["id"].tolist(), format_func=lambda v: assuntos.loc[assuntos["id"] == v, "assunto"].iloc[0])
                 if col2.button("Excluir assunto selecionado"):
                     executar("UPDATE assuntos SET ativo = 0 WHERE id = ?", (int(excluir),))
                     limpar_cache()
-                    st.success("Assunto excluído.")
+                    _toast_sucesso("Assunto excluído com sucesso.")
                     st.rerun()
 
 
@@ -3204,7 +3204,7 @@ def tela_disciplinas():
             try:
                 executar("INSERT INTO disciplinas (nome, ativo) VALUES (?, 1)", (limpar_texto(nome),))
                 limpar_cache()
-                st.success("Disciplina criada.")
+                _toast_sucesso("Disciplina criada com sucesso.")
                 st.rerun()
             except (IntegrityError, UniqueViolation):
                 st.error("Já existe uma disciplina com esse nome.")
@@ -3217,13 +3217,13 @@ def tela_disciplinas():
                     for _, row in editado.iterrows():
                         conn.execute("UPDATE disciplinas SET nome = ? WHERE id = ?", (limpar_texto(row["nome"]), int(row["id"])))
                 limpar_cache()
-                st.success("Disciplinas atualizadas.")
+                _toast_sucesso("Alterações nas disciplinas salvas com sucesso.")
                 st.rerun()
             excluir = col2.selectbox("Excluir disciplina", df["id"].tolist(), format_func=lambda v: df.loc[df["id"] == v, "nome"].iloc[0])
             if col2.button("Excluir disciplina selecionada"):
                 executar("UPDATE disciplinas SET ativo = 0 WHERE id = ?", (int(excluir),))
                 limpar_cache()
-                st.success("Disciplina excluída.")
+                _toast_sucesso("Disciplina excluída com sucesso.")
                 st.rerun()
 
     st.dataframe(df, use_container_width=True, hide_index=True)
@@ -3257,7 +3257,7 @@ def tela_alunos():
                     (nome, email, hash_senha("123")),
                 )
                 limpar_cache()
-                st.success("Aluno cadastrado. Senha inicial: 123")
+                _toast_sucesso("Aluno cadastrado com sucesso. Senha inicial: 123")
                 st.rerun()
             except (IntegrityError, UniqueViolation):
                 st.error("Já existe aluno com esse nome ou e-mail.")
@@ -3278,7 +3278,7 @@ def tela_alunos():
                         (limpar_texto(row["nome"]), normalizar_email(row["email"]), int(row["id"])),
                     )
             limpar_cache()
-            st.success("Alunos atualizados.")
+            _toast_sucesso("Dados dos alunos atualizados com sucesso.")
             st.rerun()
         except (IntegrityError, UniqueViolation):
             st.error("Nome ou e-mail duplicado.")
@@ -3289,7 +3289,7 @@ def tela_alunos():
     if col2.button("Excluir aluno selecionado"):
         executar("UPDATE alunos SET ativo = 0 WHERE id = ? AND perfil = 'Aluno'", (int(excluir_id),))
         limpar_cache()
-        st.success("Aluno excluído.")
+        _toast_sucesso("Aluno excluído com sucesso.")
         st.rerun()
 
 
@@ -3315,11 +3315,11 @@ def tela_importacao():
             destino.write_bytes(arquivo.getbuffer())
             if st.button("Importar referência enviada", type="primary", key="ref_envio"):
                 if importar_planilha_referencia(destino, substituir=True):
-                    st.success("Referência importada com sucesso.")
+                    _toast_sucesso("Planilha de referência importada com sucesso.")
                     st.rerun()
         elif st.button("Reimportar referência padrão", key="ref_padrao"):
             if importar_planilha_referencia(PLANILHA_REFERENCIA, substituir=True):
-                st.success("Referência padrão importada.")
+                _toast_sucesso("Planilha de referência padrão importada com sucesso.")
                 st.rerun()
 
         st.markdown("---")
@@ -3391,7 +3391,7 @@ def tela_importacao():
                         for av in resultado["avisos"]:
                             st.warning(av)
                 if resultado["ok"]:
-                    st.success(
+                    _toast_sucesso(
                         f"✅ Importação concluída! "
                         f"**{resultado['registros']}** execuções gravadas."
                     )
@@ -3412,7 +3412,7 @@ def tela_importacao():
                 destino = BASE_DIR / arq.name
                 destino.write_bytes(arq.getbuffer())
                 ok += int(importar_execucoes_ciclo(destino))
-            st.success(f"Planilhas processadas com sucesso: {ok}.")
+            _toast_sucesso(f"Planilhas processadas com sucesso: {ok}.")
             st.rerun()
 
 
@@ -3441,7 +3441,7 @@ def tela_configuracoes():
                 st.error("A confirmação não confere.")
             else:
                 atualizar_senha_usuario(usuario["id"], nova, 0)
-                st.success("Senha alterada.")
+                _toast_sucesso("Senha alterada com sucesso.")
 
     with aba_usuarios:
         if usuario["perfil"] != "Gestor":
@@ -3462,17 +3462,17 @@ def tela_configuracoes():
                         st.error("A senha temporária deve ter pelo menos 8 caracteres, contendo letras e números.")
                     else:
                         atualizar_senha_usuario(usuario_id, nova_senha, 1 if forcar else 0)
-                        st.success("Senha redefinida.")
+                        _toast_sucesso("Senha redefinida com sucesso. O aluno deverá trocar no próximo acesso.")
                         st.rerun()
                 ativo_atual = int(usuarios.loc[usuarios["id"] == usuario_id, "ativo"].iloc[0])
                 col4, col5 = st.columns(2)
                 if ativo_atual == 1 and col4.button("Bloquear usuário"):
                     executar("UPDATE alunos SET ativo = 0 WHERE id = ?", (int(usuario_id),))
-                    st.success("Usuário bloqueado.")
+                    _toast_sucesso("Usuário bloqueado com sucesso.")
                     st.rerun()
                 if ativo_atual == 0 and col5.button("Reativar usuário"):
                     executar("UPDATE alunos SET ativo = 1, force_troca_senha = 1 WHERE id = ?", (int(usuario_id),))
-                    st.success("Usuário reativado com troca de senha obrigatória.")
+                    _toast_sucesso("Usuário reativado. Será solicitado troca de senha no próximo acesso.")
                     st.rerun()
 
     with aba_backup:
