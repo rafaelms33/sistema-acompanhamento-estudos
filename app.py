@@ -530,6 +530,31 @@ def converter_horas(valor):
     return 0.0
 
 
+def horas_para_hm(horas_float: float) -> str:
+    """
+    Converte um valor decimal de horas para string legível 'Xh Ymin'.
+    Exemplos: 1.5 → '1h 30min' | 0.25 → '15min' | 2.0 → '2h' | 0.0 → '—'
+    """
+    try:
+        total_min = int(round(float(horas_float or 0) * 60))
+    except (TypeError, ValueError):
+        return "—"
+    if total_min <= 0:
+        return "—"
+    h = total_min // 60
+    m = total_min % 60
+    if h > 0 and m > 0:
+        return f"{h}h {m}min"
+    if h > 0:
+        return f"{h}h"
+    return f"{m}min"
+
+
+def hm_para_horas(horas: int, minutos: int) -> float:
+    """Converte horas inteiras + minutos inteiros para float decimal."""
+    return max(0.0, float(horas or 0) + float(minutos or 0) / 60)
+
+
 def converter_numero(valor):
     if pd.isna(valor):
         return 0.0
@@ -1790,7 +1815,7 @@ def painel_filtros(df, prefixo="dash"):
     aula          = st.sidebar.multiselect("Aulas", aulas, key=f"{prefixo}_aula")
     assunto       = st.sidebar.multiselect("Assuntos", assuntos, key=f"{prefixo}_assunto")
     tipo          = st.sidebar.multiselect("Tipos de estudo", tipos, key=f"{prefixo}_tipo")
-    minimo_horas  = st.sidebar.number_input("Tempo mínimo estudado", min_value=0.0, value=0.0, step=0.25, key=f"{prefixo}_min_horas")
+    minimo_horas  = st.sidebar.number_input("Tempo mínimo estudado (h)", min_value=0.0, value=0.0, step=0.25, format="%.2f", key=f"{prefixo}_min_horas")
     recentes      = st.sidebar.toggle("Atividades recentes", value=False, key=f"{prefixo}_recentes")
 
     nome_filtro = st.sidebar.text_input("Nome para salvar filtro", key=f"{prefixo}_nome_filtro")
@@ -1999,7 +2024,7 @@ def gerar_insights(df: pd.DataFrame, kpis: dict, nome_aluno: str = "") -> list:
         pct_d = dh / hsp * 100
         if pct_d < -20:
             insights.append({"tipo":"warning","icone":"📉","titulo":"Queda de produtividade",
-                "texto":f"{nome} estudou {abs(pct_d):.0f}% menos esta semana ({hs:.1f}h) vs semana anterior ({hsp:.1f}h)."})
+                "texto":f"{nome} estudou {abs(pct_d):.0f}% menos esta semana ({horas_para_hm(hs)}) vs semana anterior ({horas_para_hm(hsp)})."})
         elif pct_d > 20:
             insights.append({"tipo":"success","icone":"📈","titulo":"Semana mais produtiva",
                 "texto":f"{nome} aumentou {pct_d:.0f}% as horas esta semana ({hs:.1f}h vs {hsp:.1f}h). Excelente ritmo!"})
@@ -2032,7 +2057,7 @@ def gerar_insights(df: pd.DataFrame, kpis: dict, nome_aluno: str = "") -> list:
             neg = disc_agg[(disc_agg["horas"]/total_h < 0.05) & (disc_agg["tarefas"]>0)]
             for _, r in neg.head(2).iterrows():
                 insights.append({"tipo":"warning","icone":"📌","titulo":f"Disciplina negligenciada: {r['disciplina']}",
-                    "texto":f"Apenas {r['horas']:.1f}h em {r['disciplina']} (<5% do tempo). Reequilibre a distribuição."})
+                    "texto":f"Apenas {horas_para_hm(r['horas'])} em {r['disciplina']} (<5% do tempo). Reequilibre a distribuição."})
 
         avancadas = disc_agg[disc_agg["pct_conc"]>=80].sort_values("pct_conc", ascending=False)
         if not avancadas.empty:
@@ -2103,10 +2128,12 @@ def grafico_vazio(msg="Sem dados suficientes para este gráfico."):
 
 def preparar_tabela(df):
     tabela = df.copy()
-    if "data_execucao" in tabela:
+    if "data_execucao" in tabela.columns:
         tabela["data_execucao"] = tabela["data_execucao"].apply(formatar_data_br)
-    if "status" in tabela:
+    if "status" in tabela.columns:
         tabela["status_label"] = tabela["status"].map(STATUS_LABELS)
+    if "ch_efetiva" in tabela.columns:
+        tabela["tempo"] = tabela["ch_efetiva"].apply(horas_para_hm)
     return tabela
 
 
@@ -2173,7 +2200,7 @@ def _render_kpis_produtividade(kpis: dict):
     cols  = st.columns(5)
     cards = [
         kpi_card(
-            "Total de horas estudadas", f"{horas:.1f}h",
+            "Total de horas estudadas", horas_para_hm(horas),
             f"{kpis['qtd_dias_ativos']} dia(s) com registro no período",
             tooltip=(
                 "Soma de todas as horas de estudo (ch_efetiva) das atividades "
@@ -2183,7 +2210,7 @@ def _render_kpis_produtividade(kpis: dict):
             ),
         ),
         kpi_card(
-            "Média diária", f"{kpis['media_diaria']:.1f}h",
+            "Média diária", horas_para_hm(kpis["media_diaria"]),
             "por dia com ao menos 1 registro",
             tooltip=(
                 "Média de horas por dia ativo. "
@@ -2274,7 +2301,7 @@ def _render_kpis_avanco(kpis: dict):
             ),
         ),
         kpi_card(
-            "Horas restantes (est.)", f"{kpis['horas_restantes']:.0f}h",
+            "Horas restantes (est.)", horas_para_hm(kpis["horas_restantes"]),
             "estimativa pela média atual",
             tooltip=(
                 "Estimativa de horas necessárias para concluir as tarefas restantes. "
@@ -2540,7 +2567,7 @@ def _aba_evolucao(analisavel):
             fig3 = go.Figure(go.Bar(
                 x=ds["label"], y=ds["horas"],
                 marker_color=["#22c55e" if h==ds["horas"].max() else "#3b82f6" for h in ds["horas"]],
-                text=ds["horas"].map(lambda v: f"{v:.1f}h"), textposition="outside"))
+                text=ds["horas"].map(lambda v: horas_para_hm(v)), textposition="outside"))
             fig3.update_layout(title="Distribuição por dia da semana")
             st.plotly_chart(fig_layout(fig3, 300), use_container_width=True)
 
@@ -2647,7 +2674,7 @@ def _aba_analise_ia(df_filtrado, visao, kpis):
         insights = gerar_insights(grupo, kpis_al, nome_aluno)
         with st.expander(f"🧠 {nome_aluno}", expanded=(len(alunos_lista)==1)):
             c1,c2,c3,c4 = st.columns(4)
-            c1.metric("Horas esta semana", f"{kpis_al['horas_semana']:.1f}h", delta=f"{kpis_al['delta_horas_semana']:+.1f}h vs sem. ant.")
+            c1.metric("Horas esta semana", horas_para_hm(kpis_al["horas_semana"]), delta="+" + horas_para_hm(abs(kpis_al["delta_horas_semana"])) + " vs sem. ant." if kpis_al["delta_horas_semana"] >= 0 else "-" + horas_para_hm(abs(kpis_al["delta_horas_semana"])) + " vs sem. ant.")
             c2.metric("Progresso geral", f"{kpis_al['pct_conclusao']:.1f}%")
             c3.metric("Desempenho", f"{kpis_al['desempenho']:.1f}%")
             c4.metric("Sequência", f"{kpis_al['sequencia']} dias",
@@ -2746,7 +2773,7 @@ def _resumo_7dias(df_total: pd.DataFrame) -> None:
     cols  = st.columns(5)
     cards = [
         kpi_card(
-            "Horas (7d)", f"{h7:.1f}h",
+            "Horas (7d)", horas_para_hm(h7),
             f"{dias7} dia(s) com registro",
             tooltip=(
                 "Total de horas de estudo nos últimos 7 dias. "
@@ -2896,7 +2923,7 @@ def dashboard():
             "Útil para auditoria e acompanhamento granular.")
         tabela  = preparar_tabela(df_filtrado)
         colunas = ["aluno","tarefa","disciplina","aula","assunto","tipo","status_label",
-                   "data_execucao","ch_efetiva","qtd_questoes_feitas","qtd_acertos","desempenho","comentario"]
+                   "data_execucao","tempo","qtd_questoes_feitas","qtd_acertos","desempenho","comentario"]
         st.dataframe(
             tabela[[c for c in colunas if c in tabela.columns]],
             use_container_width=True, hide_index=True, row_height=72,
@@ -2953,7 +2980,7 @@ def exibir_card_ultima(atividade):
             <div class="quick-item"><div class="quick-label">Tipo</div>
               <div class="quick-value">{escape_html(atividade['tipo'])}</div></div>
             <div class="quick-item"><div class="quick-label">Tempo</div>
-              <div class="quick-value">{float(atividade['ch_efetiva'] or 0):.2f}h</div></div>
+              <div class="quick-value">{horas_para_hm(float(atividade["ch_efetiva"] or 0))}</div></div>
             <div class="quick-item"><div class="quick-label">Data</div>
               <div class="quick-value">{escape_html(formatar_data_br(atividade['data_execucao']))}</div></div>
             <div class="quick-item"><div class="quick-label">Atualização</div>
@@ -3152,7 +3179,7 @@ def _renderizar_secao_registro(
     render_html('<div style="font-size:.8rem;font-weight:700;color:#475569;margin-bottom:6px">✏️ Editar registro</div>')
 
     with st.form(f"form_{key_prefix}_{tarefa_id}"):
-        col1, col2, col3, col4 = st.columns(4)
+        col1, col2, col3, col4, col5 = st.columns([2, 1, 1, 1, 1])
         novo_status = col1.selectbox(
             "Status",
             STATUS_VALIDOS,
@@ -3168,16 +3195,14 @@ def _renderizar_secao_registro(
             "Data do estudo",
             value=data_atual,
         )
-        ch = col4.number_input(
-            "Tempo gasto (h)",
-            min_value=0.0,
-            value=ch_atual,
-            step=0.25,
-            format="%.2f",
-        )
+        # Tempo em horas e minutos
+        ch_h_atual = int(ch_atual)
+        ch_m_atual = int(round((ch_atual - ch_h_atual) * 60))
+        ch_h = col4.number_input("Horas", min_value=0, value=ch_h_atual, step=1)
+        ch_m = col5.number_input("Minutos", min_value=0, max_value=59, value=ch_m_atual, step=5)
 
-        col5, col6 = st.columns(2)
-        questoes = col5.number_input(
+        col5b, col6 = st.columns(2)
+        questoes = col5b.number_input(
             "Questões feitas",
             min_value=0,
             value=questoes_atual,
@@ -3217,6 +3242,9 @@ def _renderizar_secao_registro(
     if not salvar:
         return
 
+    # Converte horas + minutos para float decimal
+    ch = hm_para_horas(ch_h, ch_m)
+
     # ── Validações ──
     erros = []
     if acertos > questoes:
@@ -3252,7 +3280,7 @@ def _renderizar_secao_registro(
         if mudou:
             partes.append(f"Status: {status_ant} → {status_nov}.")
         if ch > 0:
-            partes.append(f"{ch:.2f}h registradas.")
+            partes.append(f"{horas_para_hm(ch)} registradas.")
         if questoes > 0:
             partes.append(f"{acertos}/{questoes} acertos.")
 
@@ -3354,13 +3382,13 @@ def tela_registro_rapido():
         render_html('<div class="section-title">📋 Histórico recente</div>')
         tabela = preparar_tabela(recentes)
         colunas = ["tarefa", "disciplina", "assunto", "tipo", "status_label",
-                   "data_execucao", "ch_efetiva", "qtd_questoes_feitas", "qtd_acertos",
+                   "data_execucao", "tempo", "qtd_questoes_feitas", "qtd_acertos",
                    "desempenho", "comentario"]
         st.dataframe(
             tabela[[c for c in colunas if c in tabela.columns]].rename(columns={
                 "tarefa": "Tarefa", "disciplina": "Disciplina", "assunto": "Assunto",
                 "tipo": "Tipo", "status_label": "Status", "data_execucao": "Data",
-                "ch_efetiva": "Horas", "qtd_questoes_feitas": "Questões",
+                "tempo": "Tempo", "qtd_questoes_feitas": "Questões",
                 "qtd_acertos": "Acertos", "desempenho": "Desempenho (%)",
                 "comentario": "Observações",
             }),
@@ -3409,9 +3437,13 @@ def tela_tarefas():
         if status_f:     filtrado = filtrado[filtrado["status"].isin(status_f)]
 
         colunas_editor = ["tarefa_id", "tarefa", "disciplina", "aula", "assunto", "tipo", "status",
-                          "data_execucao", "ch_efetiva", "qtd_questoes_feitas", "qtd_acertos", "desempenho", "comentario"]
-        editor = filtrado[[c for c in colunas_editor if c in filtrado.columns]].copy()
+                          "data_execucao", "ch_horas", "ch_minutos", "qtd_questoes_feitas", "qtd_acertos", "desempenho", "comentario"]
+        editor = filtrado.copy()
         editor["data_execucao"] = editor["data_execucao"].fillna("")
+        # Desmembra ch_efetiva em horas e minutos para edição amigável
+        editor["ch_horas"]   = editor["ch_efetiva"].apply(lambda v: int(float(v or 0)))
+        editor["ch_minutos"] = editor["ch_efetiva"].apply(lambda v: int(round((float(v or 0) % 1) * 60)))
+        editor = editor[[c for c in colunas_editor if c in editor.columns]]
         editado = st.data_editor(
             editor,
             use_container_width=True,
@@ -3423,8 +3455,9 @@ def tela_tarefas():
                 "tarefa": "Tarefa",
                 "tipo": st.column_config.SelectboxColumn("Tipo de estudo", options=TIPOS_ESTUDO),
                 "status": st.column_config.SelectboxColumn("Status", options=STATUS_VALIDOS, required=True),
-                "data_execucao": st.column_config.TextColumn("Data do estudo (aaaa-mm-dd)"),
-                "ch_efetiva": st.column_config.NumberColumn("Tempo gasto", min_value=0.0, step=0.25),
+                "data_execucao": st.column_config.TextColumn("Data (aaaa-mm-dd)"),
+                "ch_horas":   st.column_config.NumberColumn("Horas", min_value=0, step=1),
+                "ch_minutos": st.column_config.NumberColumn("Minutos", min_value=0, max_value=59, step=5),
                 "qtd_questoes_feitas": st.column_config.NumberColumn("Questões feitas", min_value=0, step=1),
                 "qtd_acertos": st.column_config.NumberColumn("Acertos", min_value=0, step=1),
                 "comentario": st.column_config.TextColumn("Observações", width="large"),
@@ -3438,10 +3471,11 @@ def tela_tarefas():
                     for _, row in editado.iterrows():
                         if converter_inteiro(row["qtd_acertos"]) > converter_inteiro(row["qtd_questoes_feitas"]):
                             raise ValueError(f"Tarefa {row['tarefa']}: acertos maiores que questões.")
+                        ch_float = hm_para_horas(int(row.get("ch_horas", 0)), int(row.get("ch_minutos", 0)))
                         upsert_execucao(
                             conn, aluno_id, int(row["tarefa_id"]),
                             converter_data(row["data_execucao"]),
-                            converter_horas(row["ch_efetiva"]), None, 0,
+                            ch_float, None, 0,
                             converter_inteiro(row["qtd_acertos"]),
                             limpar_texto(row["comentario"]),
                             converter_inteiro(row["qtd_questoes_feitas"]),
