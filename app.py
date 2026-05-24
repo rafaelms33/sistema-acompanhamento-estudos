@@ -1851,23 +1851,46 @@ def painel_filtros(df, prefixo="dash"):
     if recentes:
         limite = pd.Timestamp.now() - pd.Timedelta(days=15)
         filtrado = filtrado[filtrado["data_ref"] >= limite]
-    return filtrado, aluno
+    return filtrado, aluno, inicio, fim
 
 
 def base_metricas(df):
     return df[df["status"].isin(STATUS_ANALISE)].copy()
 
 
-def calcular_kpis_avancados(df: pd.DataFrame) -> dict:
+def dias_uteis_no_periodo(inicio: date | None, fim: date | None) -> int:
+    """
+    Conta quantos dias úteis (seg–sex) existem entre inicio e fim (inclusive).
+    Retorna 0 se periodo indefinido ou inválido.
+    """
+    if not inicio or not fim or fim < inicio:
+        return 0
+    total = 0
+    d = inicio
+    while d <= fim:
+        if d.weekday() < 5:   # 0=seg … 4=sex
+            total += 1
+        d += timedelta(days=1)
+    return total
+
+
+def calcular_kpis_avancados(df: pd.DataFrame,
+                             inicio_periodo: date | None = None,
+                             fim_periodo: date | None = None) -> dict:
     """
     Calcula todos os KPIs analíticos de forma centralizada.
 
+    Parâmetros:
+        df              – DataFrame já filtrado (todos os status, período e aluno).
+        inicio_periodo  – Data inicial do filtro ativo (pode ser None = "Todos").
+        fim_periodo     – Data final do filtro ativo (pode ser None = "Todos").
+
     Regras de cálculo:
-    - total_tarefas: todas as linhas do df filtrado (todos os status), não apenas as com execução.
-    - pct_conclusao: concluídas ÷ total_tarefas (todos os status) × 100.
-    - Em andamento / Não iniciadas: contados separadamente do analisável.
-    - Previsão: baseada no ritmo médio de tarefas concluídas por semana (últimas semanas com dado).
-    - conc_periodo: todas as concluídas no período filtrado (não apenas "esta semana").
+    - total_tarefas: todas as linhas do df filtrado (todos os status).
+    - pct_conclusao:  concluídas ÷ total_tarefas × 100.
+    - media_diaria:   horas_total ÷ dias_úteis_do_período (seg–sex), não por dias com registro.
+    - Previsão:       ritmo médio de tarefas concluídas por semana (últimas 8 semanas com dado).
+    - conc_periodo:   todas as concluídas no df filtrado.
     """
     hoje       = date.today()
     semana_ini = hoje - timedelta(days=hoje.weekday())
@@ -1883,26 +1906,33 @@ def calcular_kpis_avancados(df: pd.DataFrame) -> dict:
     andamento  = analisavel[analisavel["status"] == STATUS_EM_ANDAMENTO]
     nao_inic   = df[df["status"] == STATUS_NAO_INICIADA]
 
-    # Totais corretos
-    total_tarefas_banco = len(df)           # todos os status
+    total_tarefas_banco = len(df)
     qtd_concluidas      = len(concluidas)
     qtd_andamento       = len(andamento)
     qtd_nao_iniciada    = len(nao_inic)
+    pct_conclusao       = qtd_concluidas / total_tarefas_banco * 100 if total_tarefas_banco else 0
 
-    # Progresso: concluídas ÷ TODAS as tarefas (não apenas as com execução)
-    pct_conclusao = qtd_concluidas / total_tarefas_banco * 100 if total_tarefas_banco else 0
-
-    # Horas e desempenho
     horas_total = float(analisavel["ch_efetiva"].sum())
     questoes    = int(analisavel["qtd_questoes_feitas"].sum())
     acertos     = int(analisavel["qtd_acertos"].sum())
     desempenho  = acertos / questoes * 100 if questoes else 0
 
-    # Dias ativos
+    # Dias ativos (com pelo menos 1 registro)
     dias_ativos_series = analisavel["data_ref"].dropna().dt.date
-    dias_unicos  = sorted(set(dias_ativos_series.tolist()))
-    qtd_dias     = len(dias_unicos)
-    media_diaria = horas_total / qtd_dias if qtd_dias else 0
+    dias_unicos        = sorted(set(dias_ativos_series.tolist()))
+    qtd_dias           = len(dias_unicos)
+
+    # ── Média diária por dias ÚTEIS do período selecionado ──
+    # Se não há período definido, usa intervalo real dos dados
+    _ini = inicio_periodo or (min(dias_unicos) if dias_unicos else None)
+    _fim = fim_periodo    or (max(dias_unicos) if dias_unicos else None)
+    dias_uteis = dias_uteis_no_periodo(_ini, _fim)
+    media_diaria = horas_total / dias_uteis if dias_uteis > 0 else 0.0
+    media_diaria_label = (
+        "Não aplicável (sem dias úteis no período)"
+        if dias_uteis == 0 else
+        f"{dias_uteis} dia(s) útil(eis) no período"
+    )
 
     # Semana atual e anterior
     exec_semana   = analisavel[analisavel["data_ref"].dt.date >= semana_ini]
@@ -1914,9 +1944,7 @@ def calcular_kpis_avancados(df: pd.DataFrame) -> dict:
     ]
     horas_sem_pas = float(exec_sem_pas["ch_efetiva"].sum())
     conc_sem_pas  = int((exec_sem_pas["status"] == STATUS_CONCLUIDA).sum())
-
-    # "Concluídas no período" = todas concluídas no df filtrado
-    conc_periodo = qtd_concluidas
+    conc_periodo  = qtd_concluidas
 
     # Sequência
     sequencia = 0
@@ -1927,10 +1955,9 @@ def calcular_kpis_avancados(df: pd.DataFrame) -> dict:
             d -= timedelta(days=1)
     dias_sem_estudar = (hoje - max(dias_unicos)).days if dias_unicos else 0
 
-    # Produtividade
     produtividade = qtd_concluidas / horas_total if horas_total else 0
 
-    # Previsão de conclusão — baseada no ritmo médio das semanas com dado
+    # Previsão de conclusão
     tarefas_rest  = qtd_andamento + qtd_nao_iniciada
     previsao      = None
     ritmo_semanal = 0.0
@@ -1940,8 +1967,8 @@ def calcular_kpis_avancados(df: pd.DataFrame) -> dict:
         conc_data = concluidas.dropna(subset=["data_ref"]).copy()
         if not conc_data.empty:
             conc_data["semana"] = conc_data["data_ref"].dt.to_period("W")
-            por_semana = conc_data.groupby("semana").size()
-            ultimas    = por_semana.tail(8)        # até 8 semanas com dado
+            por_semana    = conc_data.groupby("semana").size()
+            ultimas       = por_semana.tail(8)
             if len(ultimas) >= 1:
                 ritmo_semanal = float(ultimas.mean())
 
@@ -1962,42 +1989,44 @@ def calcular_kpis_avancados(df: pd.DataFrame) -> dict:
     horas_restantes = tarefas_rest * media_h_tarefa
 
     return {
-        "analisavel":          analisavel,
-        "concluidas_df":       concluidas,
-        "andamento_df":        andamento,
-        "total_tarefas":       total_tarefas_banco,
-        "qtd_concluidas":      qtd_concluidas,
-        "qtd_andamento":       qtd_andamento,
-        "qtd_nao_iniciada":    qtd_nao_iniciada,
-        "pct_conclusao":       pct_conclusao,
-        "horas_total":         horas_total,
-        "horas_semana":        horas_semana,
-        "horas_sem_pas":       horas_sem_pas,
-        "delta_horas_semana":  horas_semana - horas_sem_pas,
-        "conc_periodo":        conc_periodo,
-        "conc_semana":         conc_semana,
-        "conc_sem_pas":        conc_sem_pas,
-        "delta_conc_semana":   conc_semana - conc_sem_pas,
-        "questoes":            questoes,
-        "acertos":             acertos,
-        "desempenho":          desempenho,
-        "qtd_dias_ativos":     qtd_dias,
-        "media_diaria":        media_diaria,
-        "sequencia":           sequencia,
-        "dias_sem_estudar":    dias_sem_estudar,
-        "produtividade":       produtividade,
-        "ritmo_semanal":       ritmo_semanal,
-        "tarefas_restantes":   tarefas_rest,
-        "previsao_conclusao":  previsao,
-        "previsao_base":       previsao_base,
-        "horas_restantes":     horas_restantes,
-        "dias_unicos":         dias_unicos,
+        "analisavel":           analisavel,
+        "concluidas_df":        concluidas,
+        "andamento_df":         andamento,
+        "total_tarefas":        total_tarefas_banco,
+        "qtd_concluidas":       qtd_concluidas,
+        "qtd_andamento":        qtd_andamento,
+        "qtd_nao_iniciada":     qtd_nao_iniciada,
+        "pct_conclusao":        pct_conclusao,
+        "horas_total":          horas_total,
+        "horas_semana":         horas_semana,
+        "horas_sem_pas":        horas_sem_pas,
+        "delta_horas_semana":   horas_semana - horas_sem_pas,
+        "conc_periodo":         conc_periodo,
+        "conc_semana":          conc_semana,
+        "conc_sem_pas":         conc_sem_pas,
+        "delta_conc_semana":    conc_semana - conc_sem_pas,
+        "questoes":             questoes,
+        "acertos":              acertos,
+        "desempenho":           desempenho,
+        "qtd_dias_ativos":      qtd_dias,
+        "dias_uteis":           dias_uteis,
+        "media_diaria":         media_diaria,
+        "media_diaria_label":   media_diaria_label,
+        "sequencia":            sequencia,
+        "dias_sem_estudar":     dias_sem_estudar,
+        "produtividade":        produtividade,
+        "ritmo_semanal":        ritmo_semanal,
+        "tarefas_restantes":    tarefas_rest,
+        "previsao_conclusao":   previsao,
+        "previsao_base":        previsao_base,
+        "horas_restantes":      horas_restantes,
+        "dias_unicos":          dias_unicos,
     }
 
 
-def calcular_metricas(df):
+def calcular_metricas(df, inicio_periodo=None, fim_periodo=None):
     """Compatível com código legado."""
-    k = calcular_kpis_avancados(df)
+    k = calcular_kpis_avancados(df, inicio_periodo, fim_periodo)
     return {
         "analisavel": k["analisavel"], "concluidas_df": k["concluidas_df"],
         "andamento_df": k["andamento_df"], "total": k["total_tarefas"],
@@ -2193,12 +2222,14 @@ def tela_troca_obrigatoria():
 # ─────────────────────────────────────────────
 
 def _render_kpis_produtividade(kpis: dict):
-    """Bloco: Total de horas, média diária, sequência, dias sem estudar, produtividade."""
-    horas = kpis["horas_total"]
-    seq   = kpis["sequencia"]
-    dsem  = kpis["dias_sem_estudar"]
-    cols  = st.columns(5)
-    cards = [
+    """Bloco: Total de horas, média diária por dias úteis, sequência, dias sem estudar, produtividade."""
+    horas  = kpis["horas_total"]
+    seq    = kpis["sequencia"]
+    dsem   = kpis["dias_sem_estudar"]
+    du     = kpis["dias_uteis"]
+    md_lbl = kpis["media_diaria_label"]
+    cols   = st.columns(5)
+    cards  = [
         kpi_card(
             "Total de horas estudadas", horas_para_hm(horas),
             f"{kpis['qtd_dias_ativos']} dia(s) com registro no período",
@@ -2210,13 +2241,15 @@ def _render_kpis_produtividade(kpis: dict):
             ),
         ),
         kpi_card(
-            "Média diária", horas_para_hm(kpis["media_diaria"]),
-            "por dia com ao menos 1 registro",
+            "Média diária (dias úteis)", horas_para_hm(kpis["media_diaria"]),
+            md_lbl,
             tooltip=(
-                "Média de horas por dia ativo. "
-                "Fórmula: total de horas ÷ quantidade de dias distintos com execução. "
-                "Dias sem registro não entram no denominador. "
-                "Referência: ≥ 4h/dia = ritmo consistente para concursos competitivos."
+                "Média de horas de estudo por dia útil (segunda a sexta-feira) do período selecionado. "
+                f"Fórmula: total de horas ÷ número de dias úteis do período. "
+                f"Dias úteis no período atual: {du}. "
+                "Sábados e domingos NÃO entram no divisor. "
+                "Se o período não tiver dias úteis, exibe 'Não aplicável'. "
+                "Referência: ≥ 4h/dia útil = ritmo consistente para concursos."
             ),
         ),
         kpi_card(
@@ -2733,9 +2766,12 @@ def _tooltip_grafico(texto: str) -> str:
 def _titulo_secao(label: str, tooltip: str = "", periodo: str = "") -> None:
     badge = ""
     if periodo:
-        cor   = "#eff6ff" if "7" in periodo else "#f0fdf4"
-        borda = "#bfdbfe" if "7" in periodo else "#bbf7d0"
-        txt   = "#1d4ed8" if "7" in periodo else "#166534"
+        if "15" in periodo:
+            cor, borda, txt = "#fef3c7", "#fde68a", "#92400e"   # âmbar — 15 dias
+        elif "7" in periodo:
+            cor, borda, txt = "#eff6ff", "#bfdbfe", "#1d4ed8"   # azul  — 7 dias
+        else:
+            cor, borda, txt = "#f0fdf4", "#bbf7d0", "#166534"   # verde — histórico
         badge = (
             f'<span style="background:{cor};color:{txt};border:1px solid {borda};'
             f'border-radius:999px;padding:2px 10px;font-size:.67rem;font-weight:800;'
@@ -2749,69 +2785,71 @@ def _titulo_secao(label: str, tooltip: str = "", periodo: str = "") -> None:
     )
 
 
-def _resumo_7dias(df_total: pd.DataFrame) -> None:
-    """Bloco de KPIs calculado exclusivamente sobre os últimos 7 dias."""
+def _resumo_15dias(df_total: pd.DataFrame) -> None:
+    """Bloco de KPIs calculado exclusivamente sobre os últimos 15 dias."""
     hoje  = date.today()
-    ini7  = hoje - timedelta(days=6)
-    df7   = df_total[df_total["data_ref"].dt.date >= ini7].copy()
-    ana7  = df7[df7["status"].isin(STATUS_ANALISE)]
+    ini15 = hoje - timedelta(days=14)
+    df15  = df_total[df_total["data_ref"].dt.date >= ini15].copy()
+    ana15 = df15[df15["status"].isin(STATUS_ANALISE)]
 
-    h7    = float(ana7["ch_efetiva"].sum())
-    q7    = int(ana7["qtd_questoes_feitas"].sum())
-    ac7   = int(ana7["qtd_acertos"].sum())
-    des7  = ac7 / q7 * 100 if q7 else 0
-    conc7 = int((ana7["status"] == STATUS_CONCLUIDA).sum())
-    dias7 = ana7["data_ref"].dropna().dt.date.nunique()
+    h15    = float(ana15["ch_efetiva"].sum())
+    q15    = int(ana15["qtd_questoes_feitas"].sum())
+    ac15   = int(ana15["qtd_acertos"].sum())
+    des15  = ac15 / q15 * 100 if q15 else 0
+    conc15 = int((ana15["status"] == STATUS_CONCLUIDA).sum())
+    dias15 = ana15["data_ref"].dropna().dt.date.nunique()
 
     _titulo_secao(
-        "Últimos 7 dias",
-        "Indicadores calculados apenas com execuções dos últimos 7 dias (hoje inclusive). "
-        "Útil para monitorar o ritmo recente independente do histórico total. "
-        "Não é afetado pelo filtro de período — sempre considera os 7 dias anteriores à data de hoje.",
-        "Últimos 7 dias",
+        "Últimos 15 dias",
+        "Indicadores calculados exclusivamente com execuções dos últimos 15 dias (hoje inclusive). "
+        "Permite monitorar o ritmo recente de forma mais representativa que uma semana. "
+        "Não é afetado pelo filtro de período — sempre considera os 15 dias anteriores a hoje. "
+        "Filtros de aluno e disciplina são respeitados.",
+        "Últimos 15 dias",
     )
     cols  = st.columns(5)
     cards = [
         kpi_card(
-            "Horas (7d)", horas_para_hm(h7),
-            f"{dias7} dia(s) com registro",
+            "Horas (15d)", horas_para_hm(h15),
+            f"{dias15} dia(s) com registro",
             tooltip=(
-                "Total de horas de estudo nos últimos 7 dias. "
+                "Total de horas de estudo registradas nos últimos 15 dias. "
                 "Inclui atividades Em andamento e Concluídas. "
-                "Filtros de aluno e disciplina são respeitados; filtro de período não se aplica aqui."
+                "Filtros de aluno e disciplina são respeitados; filtro de período não se aplica aqui. "
+                "Fórmula: soma de ch_efetiva das execuções com data ≥ hoje − 14 dias."
             ),
         ),
         kpi_card(
-            "Questões (7d)", f"{q7}",
-            "nos últimos 7 dias",
+            "Questões (15d)", f"{q15}",
+            "nos últimos 15 dias",
             tooltip=(
-                "Soma de questões feitas em execuções com data nos últimos 7 dias. "
-                "Fórmula: soma de qtd_questoes_feitas das execuções do período."
+                "Soma de todas as questões feitas em execuções com data nos últimos 15 dias. "
+                "Fórmula: soma de qtd_questoes_feitas das execuções do período de 15 dias."
             ),
         ),
         kpi_card(
-            "Acertos (7d)", f"{ac7}",
-            f"de {q7} questões",
+            "Acertos (15d)", f"{ac15}",
+            f"de {q15} questões",
             tooltip=(
-                "Total de acertos nos últimos 7 dias. "
-                "Fórmula: soma de qtd_acertos das execuções dos últimos 7 dias."
+                "Total de questões acertadas nos últimos 15 dias. "
+                "Fórmula: soma de qtd_acertos das execuções dos últimos 15 dias."
             ),
         ),
         kpi_card(
-            "Desempenho (7d)", f"{des7:.1f}%",
-            "taxa de acerto 7 dias",
+            "Desempenho (15d)", f"{des15:.1f}%",
+            "taxa de acerto — 15 dias",
             tooltip=(
-                "Taxa de acerto nos últimos 7 dias. "
+                "Taxa de acerto nas questões feitas nos últimos 15 dias. "
                 "Fórmula: (acertos ÷ questões) × 100. "
-                "Acima de 70% é satisfatório para concursos."
+                "Acima de 70% é satisfatório para concursos públicos."
             ),
         ),
         kpi_card(
-            "Concluídas (7d)", f"{conc7}",
-            "tarefas concluídas em 7 dias",
+            "Concluídas (15d)", f"{conc15}",
+            "tarefas concluídas em 15 dias",
             tooltip=(
                 "Quantidade de tarefas marcadas como Concluída "
-                "com data de execução nos últimos 7 dias."
+                "com data de execução nos últimos 15 dias."
             ),
         ),
     ]
@@ -2832,7 +2870,7 @@ def dashboard():
         st.info("Cadastre alunos, tarefas e registros para iniciar o acompanhamento.")
         return
 
-    df_filtrado, visao = painel_filtros(df, "dash")
+    df_filtrado, visao, inicio_periodo, fim_periodo = painel_filtros(df, "dash")
     if df_filtrado.empty:
         st.info("Nenhum registro encontrado com os filtros selecionados.")
         return
@@ -2841,16 +2879,16 @@ def dashboard():
     df_filtrado["data_ref"] = pd.to_datetime(
         df_filtrado.get("data_execucao", pd.Series(dtype=str)), errors="coerce"
     )
-    kpis       = calcular_kpis_avancados(df_filtrado)
+    kpis       = calcular_kpis_avancados(df_filtrado, inicio_periodo, fim_periodo)
     analisavel = kpis["analisavel"]
 
     st.caption(
         "📌 Passe o mouse sobre ? para ver fórmula e interpretação. "
-        "Indicadores em azul = últimos 7 dias · Verde = histórico completo."
+        "Âmbar = últimos 15 dias · Verde = histórico completo."
     )
 
-    # ── Bloco 7 dias ──
-    _resumo_7dias(df_filtrado)
+    # ── Bloco 15 dias ──
+    _resumo_15dias(df_filtrado)
 
     st.markdown("---")
 
@@ -3085,13 +3123,44 @@ def _painel_tarefa(tarefa) -> None:
 
 def _toast_sucesso(msg: str) -> None:
     """
-    Exibe uma mensagem de sucesso destacada com auto-fechamento visual.
-    Usa st.toast quando disponível (Streamlit ≥ 1.28), senão st.success.
+    Exibe mensagem de sucesso de forma garantida em todas as páginas,
+    mesmo após st.rerun().
+
+    Estratégia:
+    1. Tenta st.toast (nativo, Streamlit ≥ 1.28) — aparece como notificação flutuante.
+    2. Também salva em session_state para o banner ser renderizado no próximo ciclo
+       via _render_banner_sucesso(), chamada no início de main().
     """
+    # Guarda no session_state para persistir após rerun
+    st.session_state["_sucesso_msg"] = msg
+    # Tenta exibir imediatamente via toast
     try:
         st.toast(msg, icon="✅")
-    except AttributeError:
-        st.success(msg)
+    except (AttributeError, Exception):
+        pass   # será exibido via banner no próximo ciclo
+
+
+def _render_banner_sucesso() -> None:
+    """
+    Renderiza o banner de sucesso persistente (salvo em session_state).
+    Deve ser chamado UMA VEZ no início de cada ciclo de renderização.
+    Após exibir, limpa o session_state para não repetir.
+    """
+    msg = st.session_state.pop("_sucesso_msg", None)
+    if not msg:
+        return
+    render_html(f"""
+    <div style="
+        display:flex;align-items:center;gap:12px;
+        background:#f0fdf4;border:1px solid #86efac;border-left:5px solid #16a34a;
+        border-radius:10px;padding:12px 18px;margin-bottom:14px;
+        animation:fadeIn .3s ease;
+    ">
+      <span style="font-size:1.3rem">✅</span>
+      <span style="font-size:.9rem;font-weight:700;color:#166534">{escape_html(msg)}</span>
+    </div>
+    <style>@keyframes fadeIn{{from{{opacity:0;transform:translateY(-6px)}}to{{opacity:1;transform:none}}}}</style>
+    """)
 
 
 def _renderizar_secao_registro(
@@ -4217,6 +4286,9 @@ def main():
     if int(usuario.get("force_troca_senha") or 0) == 1:
         tela_troca_obrigatoria()
         return
+
+    # ── Exibe banner de sucesso persistente (sobrevive ao st.rerun) ──
+    _render_banner_sucesso()
 
     st.sidebar.title(APP_NAME)
     st.sidebar.write(f"**Usuário:** {usuario['nome']}")
