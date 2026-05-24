@@ -3143,82 +3143,124 @@ def _toast_sucesso(msg: str) -> None:
 def _render_banner_sucesso() -> None:
     """
     Renderiza o banner de sucesso persistente (salvo em session_state).
-    Deve ser chamado UMA VEZ no início de cada ciclo de renderização.
-    Após exibir, limpa o session_state para não repetir.
+    Chamada UMA VEZ no início de main(). CSS responsivo, sem overflow.
     """
     msg = st.session_state.pop("_sucesso_msg", None)
     if not msg:
         return
     render_html(f"""
-    <div style="
-        display:flex;align-items:center;gap:12px;
-        background:#f0fdf4;border:1px solid #86efac;border-left:5px solid #16a34a;
-        border-radius:10px;padding:12px 18px;margin-bottom:14px;
-        animation:fadeIn .3s ease;
-    ">
-      <span style="font-size:1.3rem">✅</span>
-      <span style="font-size:.9rem;font-weight:700;color:#166534">{escape_html(msg)}</span>
+    <style>
+    @keyframes rr_fadeIn {{
+      from {{ opacity:0; transform:translateY(-8px); }}
+      to   {{ opacity:1; transform:translateY(0); }}
+    }}
+    .rr-banner {{
+        display:flex; align-items:flex-start; gap:12px;
+        background:#f0fdf4; border:1px solid #86efac;
+        border-left:5px solid #16a34a; border-radius:10px;
+        padding:14px 18px; margin-bottom:16px;
+        box-sizing:border-box; width:100%; max-width:100%;
+        overflow:visible; animation:rr_fadeIn .35s ease;
+        position:relative; z-index:999;
+    }}
+    .rr-banner-icon {{ font-size:1.3rem; flex-shrink:0; padding-top:1px; }}
+    .rr-banner-text {{
+        font-size:.9rem; font-weight:700; color:#166534;
+        line-height:1.5; word-break:break-word;
+        overflow-wrap:anywhere; flex:1; min-width:0;
+    }}
+    @media(max-width:600px){{
+        .rr-banner {{ padding:10px 12px; gap:8px; }}
+        .rr-banner-text {{ font-size:.82rem; }}
+    }}
+    </style>
+    <div class="rr-banner">
+      <span class="rr-banner-icon">&#x2705;</span>
+      <span class="rr-banner-text">{escape_html(msg)}</span>
     </div>
-    <style>@keyframes fadeIn{{from{{opacity:0;transform:translateY(-6px)}}to{{opacity:1;transform:none}}}}</style>
     """)
 
 
-def _renderizar_secao_registro(
-    tarefas_df: pd.DataFrame,
-    aluno_id: int,
-    status_alvo: str,
-    titulo: str,
-    key_prefix: str,
-) -> None:
+# ─────────────────────────────────────────────────────────────────
+# REGISTRO RÁPIDO — helpers de seleção persistente
+# ─────────────────────────────────────────────────────────────────
+
+def _chave_selecao(aluno_id: int, status: str) -> str:
+    """Chave única no session_state para a tarefa selecionada por aba."""
+    return f"rr_sel_{aluno_id}_{status}"
+
+
+def _selecionar_tarefa(grupo, aluno_id, status_alvo, key_prefix):
     """
-    Seção de registro por status.
-    Ao selecionar uma tarefa:
-      • exibe o painel completo com nome, aula, assunto e descrição (sem cortes);
-      • formula pré-preenchida com valores do banco;
-      • valida e grava;
-      • exibe toast de sucesso ou erros em destaque.
+    Selectbox com persistência de seleção via session_state.
+    O tarefa_id selecionado é salvo em session_state e restaurado
+    automaticamente após st.rerun(), sem depender da posição da lista.
+    """
+    chave_ss = _chave_selecao(aluno_id, status_alvo)
+    ids      = grupo["tarefa_id"].tolist()
+    id_salvo = st.session_state.get(chave_ss)
+
+    if id_salvo in ids:
+        idx_inicial = ids.index(id_salvo)
+    else:
+        idx_inicial = 0
+        st.session_state.pop(chave_ss, None)
+
+    tarefa_id_sel = st.selectbox(
+        "Selecione a tarefa",
+        ids,
+        index=idx_inicial,
+        format_func=lambda v: _label_tarefa(grupo[grupo["tarefa_id"] == v].iloc[0]),
+        key=f"{key_prefix}_sel",
+    )
+    st.session_state[chave_ss] = tarefa_id_sel
+
+    matches = grupo[grupo["tarefa_id"] == tarefa_id_sel]
+    return None if matches.empty else matches.iloc[0]
+
+
+def _renderizar_secao_registro(tarefas_df, aluno_id, status_alvo, titulo, key_prefix):
+    """
+    Seção de registro por status com seleção persistente via session_state.
+    - Persiste tarefa_id no session_state: sobrevive a st.rerun().
+    - Pré-preenche formulário com valores do banco.
+    - Valida, grava e exibe toast de sucesso.
+    - Limpa a seleção ao cancelar ou ao mudar de status.
     """
     grupo = tarefas_df[tarefas_df["status"] == status_alvo].copy()
     if grupo.empty:
         render_html(
             f'<div style="text-align:center;padding:40px 20px;color:var(--c-muted)">'
-            f'<div style="font-size:2rem;margin-bottom:8px">✅</div>'
+            f'<div style="font-size:2rem;margin-bottom:8px">&#x2705;</div>'
             f'<div style="font-size:.9rem">Nenhuma tarefa '
             f'<strong>{STATUS_LABELS[status_alvo].lower()}</strong> no momento.</div>'
             f'</div>'
         )
         return
 
-    # ── Seletor de tarefa ──
-    tarefa_id = st.selectbox(
-        "Selecione a tarefa",
-        grupo["tarefa_id"].tolist(),
-        format_func=lambda v: _label_tarefa(grupo[grupo["tarefa_id"] == v].iloc[0]),
-        key=f"{key_prefix}_sel",
-    )
-    tarefa = grupo[grupo["tarefa_id"] == tarefa_id].iloc[0]
+    tarefa = _selecionar_tarefa(grupo, aluno_id, status_alvo, key_prefix)
+    if tarefa is None:
+        st.warning("Tarefa não encontrada. Selecione outra.")
+        return
 
-    # ── Painel completo da tarefa selecionada ──
+    tarefa_id = int(tarefa["tarefa_id"])
     _painel_tarefa(tarefa)
 
-    # ── Aviso para concluídas ──
     eh_concluida = (status_alvo == STATUS_CONCLUIDA)
     if eh_concluida:
         render_html(
             '<div class="rule-warning" style="margin-bottom:14px">'
-            '⚠️ <strong>Atenção:</strong> Esta tarefa já está <strong>Concluída</strong>. '
+            '&#x26A0;&#xFE0F; <strong>Atenção:</strong> Esta tarefa já está <strong>Concluída</strong>. '
             'Qualquer alteração modifica dados históricos. '
             'Você precisará confirmar antes de salvar.'
             '</div>'
         )
 
-    # ── Preparar valores do banco ──
-    status_atual = str(tarefa.get("status", STATUS_NAO_INICIADA))
-    tipo_atual   = str(tarefa.get("tipo") or "Outro")
-    tipo_idx     = TIPOS_ESTUDO.index(tipo_atual) if tipo_atual in TIPOS_ESTUDO else TIPOS_ESTUDO.index("Outro")
-
-    data_atual = date.today()
-    raw_data   = tarefa.get("data_execucao")
+    status_atual     = str(tarefa.get("status", STATUS_NAO_INICIADA))
+    tipo_atual       = str(tarefa.get("tipo") or "Outro")
+    tipo_idx         = TIPOS_ESTUDO.index(tipo_atual) if tipo_atual in TIPOS_ESTUDO else TIPOS_ESTUDO.index("Outro")
+    data_atual       = date.today()
+    raw_data         = tarefa.get("data_execucao")
     if raw_data is not None:
         try:
             parsed = pd.to_datetime(raw_data)
@@ -3229,7 +3271,7 @@ def _renderizar_secao_registro(
 
     def _sf(v, p=0.0):
         try:
-            f = float(v); return p if f != f else f
+            f = float(v); return p if (f != f) else f
         except (TypeError, ValueError):
             return p
 
@@ -3239,107 +3281,72 @@ def _renderizar_secao_registro(
         except (TypeError, ValueError):
             return p
 
-    ch_atual        = _sf(tarefa.get("ch_efetiva"), 0.0)
-    questoes_atual  = _si(tarefa.get("qtd_questoes_feitas"), 0)
-    acertos_atual   = _si(tarefa.get("qtd_acertos"), 0)
+    ch_atual         = _sf(tarefa.get("ch_efetiva"), 0.0)
+    questoes_atual   = _si(tarefa.get("qtd_questoes_feitas"), 0)
+    acertos_atual    = _si(tarefa.get("qtd_acertos"), 0)
     comentario_atual = str(tarefa.get("comentario") or "")
+    ch_h_atual       = int(ch_atual)
+    ch_m_atual       = int(round((ch_atual - ch_h_atual) * 60))
 
-    # ── Formulário pré-preenchido ──
-    render_html('<div style="font-size:.8rem;font-weight:700;color:#475569;margin-bottom:6px">✏️ Editar registro</div>')
+    render_html('<div style="font-size:.8rem;font-weight:700;color:#475569;margin-bottom:6px">&#x270F;&#xFE0F; Editar registro</div>')
 
     with st.form(f"form_{key_prefix}_{tarefa_id}"):
         col1, col2, col3, col4, col5 = st.columns([2, 1, 1, 1, 1])
-        novo_status = col1.selectbox(
-            "Status",
-            STATUS_VALIDOS,
-            index=STATUS_VALIDOS.index(status_atual),
-            format_func=lambda v: STATUS_LABELS[v],
-        )
-        tipo_estudo = col2.selectbox(
-            "Tipo de estudo",
-            TIPOS_ESTUDO,
-            index=tipo_idx,
-        )
-        data_estudo = col3.date_input(
-            "Data do estudo",
-            value=data_atual,
-        )
-        # Tempo em horas e minutos
-        ch_h_atual = int(ch_atual)
-        ch_m_atual = int(round((ch_atual - ch_h_atual) * 60))
-        ch_h = col4.number_input("Horas", min_value=0, value=ch_h_atual, step=1)
+        novo_status = col1.selectbox("Status", STATUS_VALIDOS,
+            index=STATUS_VALIDOS.index(status_atual), format_func=lambda v: STATUS_LABELS[v])
+        tipo_estudo = col2.selectbox("Tipo de estudo", TIPOS_ESTUDO, index=tipo_idx)
+        data_estudo = col3.date_input("Data do estudo", value=data_atual)
+        ch_h = col4.number_input("Horas",   min_value=0, value=ch_h_atual, step=1)
         ch_m = col5.number_input("Minutos", min_value=0, max_value=59, value=ch_m_atual, step=5)
 
-        col5b, col6 = st.columns(2)
-        questoes = col5b.number_input(
-            "Questões feitas",
-            min_value=0,
-            value=questoes_atual,
-            step=1,
-        )
-        acertos = col6.number_input(
-            "Acertos",
-            min_value=0,
-            value=acertos_atual,
-            step=1,
-        )
-
-        comentario = st.text_area(
-            "Observações",
-            value=comentario_atual,
-            placeholder="Anotações sobre esta sessão de estudo (opcional)…",
-            height=100,
-        )
+        col_q, col_a = st.columns(2)
+        questoes   = col_q.number_input("Questões feitas", min_value=0, value=questoes_atual, step=1)
+        acertos    = col_a.number_input("Acertos",         min_value=0, value=acertos_atual,  step=1)
+        comentario = st.text_area("Observações", value=comentario_atual,
+            placeholder="Anotações sobre esta sessão de estudo (opcional)…", height=100)
 
         if eh_concluida:
             confirmado = st.checkbox(
-                "✅ Confirmo que desejo alterar este registro já concluído (dados históricos serão modificados)",
-                value=False,
-            )
+                "Confirmo que desejo alterar este registro já concluído (dados históricos serão modificados)",
+                value=False)
         else:
             confirmado = True
 
         col_b1, col_b2 = st.columns([3, 1])
-        salvar   = col_b1.form_submit_button("💾 Salvar", use_container_width=True, type="primary")
-        cancelar = col_b2.form_submit_button("✖ Cancelar", use_container_width=True)
+        salvar   = col_b1.form_submit_button("&#x1F4BE; Salvar", use_container_width=True, type="primary")
+        cancelar = col_b2.form_submit_button("Cancelar", use_container_width=True)
 
-    # ── Pós-form ──
     if cancelar:
+        st.session_state.pop(_chave_selecao(aluno_id, status_alvo), None)
         st.info("Nenhuma alteração foi salva.")
         return
 
     if not salvar:
         return
 
-    # Converte horas + minutos para float decimal
     ch = hm_para_horas(ch_h, ch_m)
 
-    # ── Validações ──
     erros = []
     if acertos > questoes:
         erros.append("O número de acertos não pode ser maior que o número de questões feitas.")
     if eh_concluida and not confirmado:
         erros.append("Para alterar uma tarefa já concluída, marque a confirmação acima.")
     pode, msg_bloqueio = _verificar_regra_andamento(
-        tarefas_df, tarefa, novo_status, int(tarefa["disciplina_id"])
-    )
+        tarefas_df, tarefa, novo_status, int(tarefa["disciplina_id"]))
     if not pode:
         erros.append(msg_bloqueio)
 
     if erros:
         for e in erros:
-            render_html(f'<div class="rule-error">❌ {escape_html(e)}</div>')
+            render_html(f'<div class="rule-error">&#x274C; {escape_html(e)}</div>')
         return
 
-    # ── Gravação ──
     try:
         with st.spinner("Salvando registro…"):
             with conectar() as conn:
-                upsert_execucao(
-                    conn, aluno_id, int(tarefa_id), str(data_estudo),
+                upsert_execucao(conn, aluno_id, tarefa_id, str(data_estudo),
                     ch, None, 0, acertos, limpar_texto(comentario),
-                    questoes, novo_status, tipo_estudo,
-                )
+                    questoes, novo_status, tipo_estudo)
         limpar_cache()
 
         status_ant = STATUS_LABELS.get(status_atual, status_atual)
@@ -3353,36 +3360,40 @@ def _renderizar_secao_registro(
         if questoes > 0:
             partes.append(f"{acertos}/{questoes} acertos.")
 
+        if mudou:
+            st.session_state.pop(_chave_selecao(aluno_id, status_alvo), None)
+
         _toast_sucesso(" ".join(partes))
         st.rerun()
 
     except Exception as exc:
-        erro_usuario("❌ Não foi possível salvar. Verifique os dados e tente novamente.", exc)
+        erro_usuario("Nao foi possivel salvar. Verifique os dados e tente novamente.", exc)
 
 
 def tela_registro_rapido():
     render_html(
         '<div class="hero">'
-        '<h1>⚡ Registro Rápido</h1>'
+        '<h1>&#x26A1; Registro Rápido</h1>'
         '<p>Selecione uma tarefa para ver seu conteúdo completo e registrar o progresso. '
-        'O formulário é pré-preenchido automaticamente com os dados do último registro.</p>'
+        'O formulário é pré-preenchido automaticamente com os dados do último registro. '
+        'A seleção é preservada mesmo após atualizações da página.</p>'
         '</div>'
     )
 
     usuario = aluno_logado()
     alunos  = alunos_ativos()
 
-    # ── Seleção do aluno ──
     if usuario["perfil"] == "Aluno":
         aluno_id = int(usuario["id"])
         render_html(
             f'<div style="display:inline-flex;align-items:center;gap:8px;'
             f'background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;'
             f'padding:8px 14px;margin-bottom:14px">'
-            f'<span style="font-size:1.1rem">👤</span>'
-            f'<div><div style="font-size:.66rem;font-weight:800;color:#94a3b8;text-transform:uppercase">Aluno</div>'
-            f'<div style="font-size:.9rem;font-weight:700;color:#0f172a">{escape_html(usuario["nome"])}</div></div>'
-            f'</div>'
+            f'<span style="font-size:1.1rem">&#x1F464;</span>'
+            f'<div>'
+            f'<div style="font-size:.66rem;font-weight:800;color:#94a3b8;text-transform:uppercase">Aluno</div>'
+            f'<div style="font-size:.9rem;font-weight:700;color:#0f172a">{escape_html(usuario["nome"])}</div>'
+            f'</div></div>'
         )
     else:
         if alunos.empty:
@@ -3392,41 +3403,38 @@ def tela_registro_rapido():
             "Aluno",
             alunos["id"].tolist(),
             format_func=lambda v: alunos.loc[alunos["id"] == v, "nome"].iloc[0],
+            key="rr_aluno_sel",
         )
 
-    # ── Última atividade ──
     exibir_card_ultima(ultima_atividade(aluno_id))
 
-    # ── Carrega tarefas ──
     tarefas = carregar_visao_tarefas(aluno_id)
     if tarefas.empty:
         st.info("Nenhuma tarefa vinculada a este aluno. Vá em **Tarefas** para vincular.")
         return
 
-    # ── Contadores ──
     qtd_nao  = len(tarefas[tarefas["status"] == STATUS_NAO_INICIADA])
     qtd_and  = len(tarefas[tarefas["status"] == STATUS_EM_ANDAMENTO])
     qtd_conc = len(tarefas[tarefas["status"] == STATUS_CONCLUIDA])
 
-    # ── Abas por status ──
     aba_nao, aba_and, aba_conc = st.tabs([
-        f"🔘 Não iniciadas ({qtd_nao})",
-        f"🟡 Em andamento ({qtd_and})",
-        f"🟢 Concluídas ({qtd_conc})",
+        f"Nao iniciadas ({qtd_nao})",
+        f"Em andamento ({qtd_and})",
+        f"Concluidas ({qtd_conc})",
     ])
 
     with aba_nao:
         render_html(
             '<div class="insight-card info" style="margin-bottom:14px">'
-            '<div class="insight-icon">ℹ️</div>'
+            '<div class="insight-icon">&#x2139;&#xFE0F;</div>'
             '<div class="insight-body">'
-            '<div class="insight-title">Regra: tarefas não iniciadas</div>'
-            '<p class="insight-text">Uma tarefa não iniciada só pode ser iniciada se '
-            '<strong>não houver outra tarefa em andamento na mesma disciplina</strong>. '
+            '<div class="insight-title">Regra: tarefas nao iniciadas</div>'
+            '<p class="insight-text">Uma tarefa nao iniciada so pode ser iniciada se '
+            '<strong>nao houver outra tarefa em andamento na mesma disciplina</strong>. '
             'Conclua ou atualize a tarefa em andamento primeiro.</p>'
             '</div></div>'
         )
-        _renderizar_secao_registro(tarefas, aluno_id, STATUS_NAO_INICIADA, "Não iniciadas", "rr_nao")
+        _renderizar_secao_registro(tarefas, aluno_id, STATUS_NAO_INICIADA, "Nao iniciadas", "rr_nao")
 
     with aba_and:
         _renderizar_secao_registro(tarefas, aluno_id, STATUS_EM_ANDAMENTO, "Em andamento", "rr_and")
@@ -3434,41 +3442,35 @@ def tela_registro_rapido():
     with aba_conc:
         render_html(
             '<div class="insight-card warning" style="margin-bottom:14px">'
-            '<div class="insight-icon">⚠️</div>'
+            '<div class="insight-icon">&#x26A0;&#xFE0F;</div>'
             '<div class="insight-body">'
-            '<div class="insight-title">Atenção: tarefas concluídas</div>'
-            '<p class="insight-text">Alterações em tarefas concluídas modificam o histórico de estudos. '
-            'O sistema exigirá confirmação explícita antes de salvar.</p>'
+            '<div class="insight-title">Atencao: tarefas concluidas</div>'
+            '<p class="insight-text">Alteracoes em tarefas concluidas modificam o historico de estudos. '
+            'O sistema exigira confirmacao explicita antes de salvar.</p>'
             '</div></div>'
         )
-        _renderizar_secao_registro(tarefas, aluno_id, STATUS_CONCLUIDA, "Concluídas", "rr_conc")
+        _renderizar_secao_registro(tarefas, aluno_id, STATUS_CONCLUIDA, "Concluidas", "rr_conc")
 
-    # ── Histórico recente ──
     recentes = carregar_execucoes()
     recentes = recentes[recentes["aluno_id"] == aluno_id].head(10)
     if not recentes.empty:
         st.markdown("---")
-        render_html('<div class="section-title">📋 Histórico recente</div>')
-        tabela = preparar_tabela(recentes)
-        colunas = ["tarefa", "disciplina", "assunto", "tipo", "status_label",
-                   "data_execucao", "tempo", "qtd_questoes_feitas", "qtd_acertos",
-                   "desempenho", "comentario"]
+        render_html('<div class="section-title">&#x1F4CB; Historico recente</div>')
+        tabela  = preparar_tabela(recentes)
+        colunas = ["tarefa","disciplina","assunto","tipo","status_label",
+                   "data_execucao","tempo","qtd_questoes_feitas","qtd_acertos",
+                   "desempenho","comentario"]
         st.dataframe(
             tabela[[c for c in colunas if c in tabela.columns]].rename(columns={
-                "tarefa": "Tarefa", "disciplina": "Disciplina", "assunto": "Assunto",
-                "tipo": "Tipo", "status_label": "Status", "data_execucao": "Data",
-                "tempo": "Tempo", "qtd_questoes_feitas": "Questões",
-                "qtd_acertos": "Acertos", "desempenho": "Desempenho (%)",
-                "comentario": "Observações",
+                "tarefa":"Tarefa","disciplina":"Disciplina","assunto":"Assunto",
+                "tipo":"Tipo","status_label":"Status","data_execucao":"Data",
+                "tempo":"Tempo","qtd_questoes_feitas":"Questoes",
+                "qtd_acertos":"Acertos","desempenho":"Desempenho (%)",
+                "comentario":"Observacoes",
             }),
-            use_container_width=True,
-            hide_index=True,
-            row_height=64,
+            use_container_width=True, hide_index=True, row_height=64,
         )
 
-
-# ─────────────────────────────────────────────
-# TELA: TAREFAS (CRUD)
 # ─────────────────────────────────────────────
 
 def tela_tarefas():
