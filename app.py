@@ -1834,73 +1834,139 @@ def base_metricas(df):
 
 
 def calcular_kpis_avancados(df: pd.DataFrame) -> dict:
-    """Calcula todos os KPIs analíticos de forma centralizada."""
-    hoje = date.today()
+    """
+    Calcula todos os KPIs analíticos de forma centralizada.
+
+    Regras de cálculo:
+    - total_tarefas: todas as linhas do df filtrado (todos os status), não apenas as com execução.
+    - pct_conclusao: concluídas ÷ total_tarefas (todos os status) × 100.
+    - Em andamento / Não iniciadas: contados separadamente do analisável.
+    - Previsão: baseada no ritmo médio de tarefas concluídas por semana (últimas semanas com dado).
+    - conc_periodo: todas as concluídas no período filtrado (não apenas "esta semana").
+    """
+    hoje       = date.today()
     semana_ini = hoje - timedelta(days=hoje.weekday())
     semana_pas = semana_ini - timedelta(days=7)
 
     df = df.copy()
-    df["data_ref"] = pd.to_datetime(df.get("data_execucao", pd.Series(dtype=str)), errors="coerce")
+    df["data_ref"] = pd.to_datetime(
+        df.get("data_execucao", pd.Series(dtype=str)), errors="coerce"
+    )
 
     analisavel = df[df["status"].isin(STATUS_ANALISE)].copy()
     concluidas = analisavel[analisavel["status"] == STATUS_CONCLUIDA]
     andamento  = analisavel[analisavel["status"] == STATUS_EM_ANDAMENTO]
     nao_inic   = df[df["status"] == STATUS_NAO_INICIADA]
 
-    total_tarefas    = len(df)
-    qtd_concluidas   = len(concluidas)
-    qtd_andamento    = len(andamento)
-    qtd_nao_iniciada = len(nao_inic)
-    pct_conclusao    = qtd_concluidas / total_tarefas * 100 if total_tarefas else 0
+    # Totais corretos
+    total_tarefas_banco = len(df)           # todos os status
+    qtd_concluidas      = len(concluidas)
+    qtd_andamento       = len(andamento)
+    qtd_nao_iniciada    = len(nao_inic)
 
+    # Progresso: concluídas ÷ TODAS as tarefas (não apenas as com execução)
+    pct_conclusao = qtd_concluidas / total_tarefas_banco * 100 if total_tarefas_banco else 0
+
+    # Horas e desempenho
     horas_total = float(analisavel["ch_efetiva"].sum())
     questoes    = int(analisavel["qtd_questoes_feitas"].sum())
     acertos     = int(analisavel["qtd_acertos"].sum())
     desempenho  = acertos / questoes * 100 if questoes else 0
 
+    # Dias ativos
     dias_ativos_series = analisavel["data_ref"].dropna().dt.date
-    dias_unicos  = sorted(dias_ativos_series.unique()) if len(dias_ativos_series) else []
+    dias_unicos  = sorted(set(dias_ativos_series.tolist()))
     qtd_dias     = len(dias_unicos)
     media_diaria = horas_total / qtd_dias if qtd_dias else 0
 
-    exec_semana  = analisavel[analisavel["data_ref"].dt.date >= semana_ini]
-    horas_semana = float(exec_semana["ch_efetiva"].sum())
-    conc_semana  = int((exec_semana["status"] == STATUS_CONCLUIDA).sum())
-
-    exec_sem_pas  = analisavel[(analisavel["data_ref"].dt.date >= semana_pas) & (analisavel["data_ref"].dt.date < semana_ini)]
+    # Semana atual e anterior
+    exec_semana   = analisavel[analisavel["data_ref"].dt.date >= semana_ini]
+    horas_semana  = float(exec_semana["ch_efetiva"].sum())
+    conc_semana   = int((exec_semana["status"] == STATUS_CONCLUIDA).sum())
+    exec_sem_pas  = analisavel[
+        (analisavel["data_ref"].dt.date >= semana_pas) &
+        (analisavel["data_ref"].dt.date < semana_ini)
+    ]
     horas_sem_pas = float(exec_sem_pas["ch_efetiva"].sum())
     conc_sem_pas  = int((exec_sem_pas["status"] == STATUS_CONCLUIDA).sum())
 
+    # "Concluídas no período" = todas concluídas no df filtrado
+    conc_periodo = qtd_concluidas
+
+    # Sequência
     sequencia = 0
     if dias_unicos:
         d = hoje
         while d in dias_unicos:
-            sequencia += 1; d -= timedelta(days=1)
-
+            sequencia += 1
+            d -= timedelta(days=1)
     dias_sem_estudar = (hoje - max(dias_unicos)).days if dias_unicos else 0
-    produtividade    = qtd_concluidas / horas_total if horas_total else 0
-    ritmo_semanal    = conc_semana if conc_semana > 0 else (qtd_concluidas / max(1, qtd_dias) * 7)
-    tarefas_rest     = qtd_andamento + qtd_nao_iniciada
-    semanas_rest     = tarefas_rest / ritmo_semanal if ritmo_semanal > 0 else None
-    previsao         = (hoje + timedelta(weeks=semanas_rest)) if semanas_rest is not None else None
-    media_h_tarefa   = horas_total / qtd_concluidas if qtd_concluidas else 0
-    horas_restantes  = tarefas_rest * media_h_tarefa
+
+    # Produtividade
+    produtividade = qtd_concluidas / horas_total if horas_total else 0
+
+    # Previsão de conclusão — baseada no ritmo médio das semanas com dado
+    tarefas_rest  = qtd_andamento + qtd_nao_iniciada
+    previsao      = None
+    ritmo_semanal = 0.0
+    previsao_base = ""
+
+    if not concluidas.empty and "data_ref" in concluidas.columns:
+        conc_data = concluidas.dropna(subset=["data_ref"]).copy()
+        if not conc_data.empty:
+            conc_data["semana"] = conc_data["data_ref"].dt.to_period("W")
+            por_semana = conc_data.groupby("semana").size()
+            ultimas    = por_semana.tail(8)        # até 8 semanas com dado
+            if len(ultimas) >= 1:
+                ritmo_semanal = float(ultimas.mean())
+
+    if tarefas_rest == 0:
+        previsao_base = "Todas as tarefas já concluídas no período filtrado."
+    elif ritmo_semanal > 0:
+        semanas_rest  = tarefas_rest / ritmo_semanal
+        previsao      = hoje + timedelta(weeks=semanas_rest)
+        previsao_base = (
+            f"Ritmo médio: {ritmo_semanal:.1f} tarefas/semana "
+            f"· {tarefas_rest} tarefa(s) restante(s) "
+            f"· Estimativa: {previsao.strftime('%d/%m/%Y')}."
+        )
+    else:
+        previsao_base = "Dados insuficientes: nenhuma tarefa concluída com data registrada."
+
+    media_h_tarefa  = horas_total / qtd_concluidas if qtd_concluidas else 0
+    horas_restantes = tarefas_rest * media_h_tarefa
 
     return {
-        "analisavel": analisavel, "concluidas_df": concluidas, "andamento_df": andamento,
-        "total_tarefas": total_tarefas, "qtd_concluidas": qtd_concluidas,
-        "qtd_andamento": qtd_andamento, "qtd_nao_iniciada": qtd_nao_iniciada,
-        "pct_conclusao": pct_conclusao, "horas_total": horas_total,
-        "horas_semana": horas_semana, "horas_sem_pas": horas_sem_pas,
-        "delta_horas_semana": horas_semana - horas_sem_pas,
-        "conc_semana": conc_semana, "conc_sem_pas": conc_sem_pas,
-        "delta_conc_semana": conc_semana - conc_sem_pas,
-        "questoes": questoes, "acertos": acertos, "desempenho": desempenho,
-        "qtd_dias_ativos": qtd_dias, "media_diaria": media_diaria,
-        "sequencia": sequencia, "dias_sem_estudar": dias_sem_estudar,
-        "produtividade": produtividade, "ritmo_semanal": ritmo_semanal,
-        "tarefas_restantes": tarefas_rest, "previsao_conclusao": previsao,
-        "horas_restantes": horas_restantes, "dias_unicos": dias_unicos,
+        "analisavel":          analisavel,
+        "concluidas_df":       concluidas,
+        "andamento_df":        andamento,
+        "total_tarefas":       total_tarefas_banco,
+        "qtd_concluidas":      qtd_concluidas,
+        "qtd_andamento":       qtd_andamento,
+        "qtd_nao_iniciada":    qtd_nao_iniciada,
+        "pct_conclusao":       pct_conclusao,
+        "horas_total":         horas_total,
+        "horas_semana":        horas_semana,
+        "horas_sem_pas":       horas_sem_pas,
+        "delta_horas_semana":  horas_semana - horas_sem_pas,
+        "conc_periodo":        conc_periodo,
+        "conc_semana":         conc_semana,
+        "conc_sem_pas":        conc_sem_pas,
+        "delta_conc_semana":   conc_semana - conc_sem_pas,
+        "questoes":            questoes,
+        "acertos":             acertos,
+        "desempenho":          desempenho,
+        "qtd_dias_ativos":     qtd_dias,
+        "media_diaria":        media_diaria,
+        "sequencia":           sequencia,
+        "dias_sem_estudar":    dias_sem_estudar,
+        "produtividade":       produtividade,
+        "ritmo_semanal":       ritmo_semanal,
+        "tarefas_restantes":   tarefas_rest,
+        "previsao_conclusao":  previsao,
+        "previsao_base":       previsao_base,
+        "horas_restantes":     horas_restantes,
+        "dias_unicos":         dias_unicos,
     }
 
 
@@ -2100,69 +2166,189 @@ def tela_troca_obrigatoria():
 # ─────────────────────────────────────────────
 
 def _render_kpis_produtividade(kpis: dict):
-    hs  = kpis["horas_semana"]
-    hsp = kpis["horas_sem_pas"]
-    dh  = kpis["delta_horas_semana"]
-    seq = kpis["sequencia"]
-    dsem = kpis["dias_sem_estudar"]
-    cols = st.columns(5)
+    """Bloco: Total de horas, média diária, sequência, dias sem estudar, produtividade."""
+    horas = kpis["horas_total"]
+    seq   = kpis["sequencia"]
+    dsem  = kpis["dias_sem_estudar"]
+    cols  = st.columns(5)
     cards = [
-        kpi_card("Horas esta semana", f"{hs:.1f}h", f"Semana anterior: {hsp:.1f}h",
-            f"{abs(dh):.1f}h vs sem. passada", delta_pos=(dh >= 0),
-            tooltip="Total de horas desta semana (seg–hoje). Fórmula: soma de ch_efetiva com data ≥ início da semana. ▲ = mais horas que a semana anterior."),
-        kpi_card("Média diária", f"{kpis['media_diaria']:.1f}h", "por dia ativo (com registro)",
-            tooltip="Horas médias por dia com atividade registrada. Fórmula: total de horas ÷ dias distintos. ≥ 4h/dia = consistente para concursos."),
-        kpi_card("Sequência atual", f"{seq} dia{'s' if seq!=1 else ''}", "dias consecutivos com registro",
-            tooltip="Dias seguidos (até hoje) com pelo menos uma atividade. Calculado para trás a partir de hoje. Sequências longas = hábito consolidado."),
-        kpi_card("Dias sem estudar", f"{dsem}", "desde o último registro",
-            delta=f"{dsem}d de pausa" if dsem > 0 else "", delta_pos=False,
-            tooltip="Dias desde o último registro. 0 = estudou hoje. Acima de 3 dias = alerta de pausa."),
-        kpi_card("Produtividade", f"{kpis['produtividade']:.2f}", "tarefas concluídas / hora",
-            tooltip="Eficiência: tarefas concluídas por hora. Fórmula: concluídas ÷ horas. > 1,0 = boa taxa. < 0,3 = sessões longas com pouco resultado."),
+        kpi_card(
+            "Total de horas estudadas", f"{horas:.1f}h",
+            f"{kpis['qtd_dias_ativos']} dia(s) com registro no período",
+            tooltip=(
+                "Soma de todas as horas de estudo (ch_efetiva) das atividades "
+                "Em andamento e Concluídas dentro do período e filtros selecionados. "
+                "Filtros que impactam: aluno, disciplina, tipo, período de datas. "
+                "Quanto maior, mais tempo dedicado — mas compare com desempenho para avaliar eficiência."
+            ),
+        ),
+        kpi_card(
+            "Média diária", f"{kpis['media_diaria']:.1f}h",
+            "por dia com ao menos 1 registro",
+            tooltip=(
+                "Média de horas por dia ativo. "
+                "Fórmula: total de horas ÷ quantidade de dias distintos com execução. "
+                "Dias sem registro não entram no denominador. "
+                "Referência: ≥ 4h/dia = ritmo consistente para concursos competitivos."
+            ),
+        ),
+        kpi_card(
+            "Sequência atual", f"{seq} dia{'s' if seq!=1 else ''}",
+            "dias consecutivos com registro",
+            tooltip=(
+                "Quantos dias seguidos (contando de hoje para trás) houve pelo menos 1 execução. "
+                "Reinicia quando há um dia sem registro. "
+                "Sequências longas indicam hábito de estudo consolidado."
+            ),
+        ),
+        kpi_card(
+            "Dias sem estudar", f"{dsem}",
+            "desde o último registro",
+            delta=f"{dsem}d de pausa" if dsem > 0 else "",
+            delta_pos=False,
+            tooltip=(
+                "Quantidade de dias desde o último registro de execução. "
+                "0 = estudou hoje. Acima de 3 dias consecutivos = alerta de perda de ritmo. "
+                "Não é afetado pelo filtro de período — sempre considera a data mais recente no banco."
+            ),
+        ),
+        kpi_card(
+            "Produtividade", f"{kpis['produtividade']:.2f}",
+            "tarefas concluídas / hora estudada",
+            tooltip=(
+                "Eficiência: quantas tarefas são concluídas por hora de estudo. "
+                "Fórmula: tarefas concluídas ÷ total de horas. "
+                "> 1,0 = boa taxa de conclusão. "
+                "< 0,3 pode indicar sessões longas sem finalizar tarefas. "
+                "Filtros ativos: aluno, disciplina, período."
+            ),
+        ),
     ]
     for col, card in zip(cols, cards):
-        with col: render_html(card)
+        with col:
+            render_html(card)
 
 
 def _render_kpis_avanco(kpis: dict):
-    pct   = kpis["pct_conclusao"]
-    prev  = kpis.get("previsao_conclusao")
-    prev_str = prev.strftime("%d/%m/%Y") if prev else "—"
+    """Bloco: Progresso geral, Em andamento, Tarefas restantes, Horas restantes, Previsão."""
+    pct      = kpis["pct_conclusao"]
+    prev     = kpis.get("previsao_conclusao")
+    prev_str = prev.strftime("%d/%m/%Y") if prev else "Dados insuficientes"
+    prev_sub = kpis.get("previsao_base", "")
+    total    = kpis["total_tarefas"]
+    conc     = kpis["qtd_concluidas"]
+    and_     = kpis["qtd_andamento"]
+    nao      = kpis["qtd_nao_iniciada"]
+    rest     = kpis["tarefas_restantes"]
+
     cols = st.columns(5)
     cards = [
-        kpi_card("Progresso geral", f"{pct:.1f}%",
-            f"{kpis['qtd_concluidas']} de {kpis['total_tarefas']} tarefas concluídas",
-            tooltip="% de tarefas concluídas. Fórmula: (concluídas ÷ total) × 100. Considera apenas status CONCLUIDA."),
-        kpi_card("Em andamento", f"{kpis['qtd_andamento']}", f"+ {kpis['qtd_nao_iniciada']} não iniciadas",
-            tooltip="Tarefas com status EM_ANDAMENTO. Muitas simultâneas podem indicar falta de foco."),
-        kpi_card("Tarefas restantes", f"{kpis['tarefas_restantes']}", "andamento + não iniciadas",
-            tooltip="Total de tarefas não concluídas. Base para estimativa de conclusão do plano."),
-        kpi_card("Horas restantes (est.)", f"{kpis['horas_restantes']:.0f}h", "base: média por tarefa concluída",
-            tooltip="Estimativa de horas para concluir o restante. Fórmula: (horas ÷ concluídas) × restantes. Baseado no ritmo atual."),
-        kpi_card("Previsão de conclusão", prev_str, "baseado no ritmo semanal atual",
-            tooltip="Data estimada de término. Fórmula: hoje + (restantes ÷ ritmo semanal) semanas. Ritmo = média de conclusões/semana."),
+        kpi_card(
+            "Progresso geral", f"{pct:.1f}%",
+            f"{conc} concluídas de {total} tarefas totais",
+            tooltip=(
+                "Percentual de conclusão em relação a TODAS as tarefas do aluno no período filtrado "
+                "(concluídas, em andamento e não iniciadas). "
+                f"Fórmula: ({conc} concluídas ÷ {total} total) × 100. "
+                "Filtros ativos: aluno, disciplina, período. "
+                "100% = plano concluído."
+            ),
+        ),
+        kpi_card(
+            "Em andamento", f"{and_}",
+            f"de {total} tarefas totais",
+            tooltip=(
+                "Quantidade de tarefas com status EM_ANDAMENTO dentro dos filtros selecionados. "
+                "Não confunde com Não iniciadas (essas são contadas separadamente). "
+                f"Não iniciadas: {nao}. "
+                "Muitas tarefas em andamento simultâneas podem indicar falta de foco."
+            ),
+        ),
+        kpi_card(
+            "Tarefas restantes", f"{rest}",
+            f"{and_} em andamento + {nao} não iniciadas",
+            tooltip=(
+                "Total de tarefas ainda não concluídas dentro dos filtros ativos. "
+                f"Fórmula: em andamento ({and_}) + não iniciadas ({nao}). "
+                "Base usada para calcular previsão de conclusão e horas estimadas restantes."
+            ),
+        ),
+        kpi_card(
+            "Horas restantes (est.)", f"{kpis['horas_restantes']:.0f}h",
+            "estimativa pela média atual",
+            tooltip=(
+                "Estimativa de horas necessárias para concluir as tarefas restantes. "
+                f"Fórmula: (horas totais ÷ tarefas concluídas) × tarefas restantes ({rest}). "
+                "Baseado no ritmo médio atual. Varia conforme a dedicação futura."
+            ),
+        ),
+        kpi_card(
+            "Previsão de conclusão", prev_str,
+            prev_sub[:80] + ("…" if len(prev_sub) > 80 else ""),
+            tooltip=(
+                "Data estimada de término do plano de estudos. "
+                "Fórmula: hoje + (tarefas restantes ÷ ritmo médio semanal) semanas. "
+                "Ritmo = média de tarefas concluídas por semana nas últimas semanas com dado. "
+                f"Detalhes: {prev_sub}"
+            ),
+        ),
     ]
     for col, card in zip(cols, cards):
-        with col: render_html(card)
+        with col:
+            render_html(card)
 
 
 def _render_kpis_desempenho(kpis: dict):
-    des = kpis["desempenho"]; q = kpis["questoes"]; ac = kpis["acertos"]
-    cs  = kpis["conc_semana"]; csp = kpis["conc_sem_pas"]; dc = kpis["delta_conc_semana"]
+    """Bloco: Desempenho, Questões feitas, Concluídas no período, Dias ativos."""
+    des   = kpis["desempenho"]
+    q     = kpis["questoes"]
+    ac    = kpis["acertos"]
+    conc  = kpis["conc_periodo"]   # todas concluídas no período filtrado
+    total = kpis["total_tarefas"]
+
     cols = st.columns(4)
     cards = [
-        kpi_card("Desempenho geral", f"{des:.1f}%", f"{ac} acertos em {q} questões",
-            tooltip="Taxa de acerto. Fórmula: (acertos ÷ questões) × 100. ≥ 70% = satisfatório para concursos."),
-        kpi_card("Questões feitas", f"{q:,}".replace(",","."), "total acumulado",
-            tooltip="Soma de todas as questões feitas em atividades iniciadas/concluídas. Mais questões = maior treinamento."),
-        kpi_card("Concluídas esta semana", f"{cs}", f"semana anterior: {csp}",
-            delta=f"{abs(dc)} tarefa{'s' if abs(dc)!=1 else ''} vs sem. ant.", delta_pos=(dc >= 0),
-            tooltip="Tarefas concluídas na semana atual (segunda a hoje). ▲ = aceleração em relação à semana passada."),
-        kpi_card("Dias ativos", f"{kpis['qtd_dias_ativos']}", "dias com pelo menos 1 registro",
-            tooltip="Dias distintos com algum registro. Maior número = hábito mais sólido e frequência maior."),
+        kpi_card(
+            "Desempenho geral", f"{des:.1f}%",
+            f"{ac} acertos em {q} questões",
+            tooltip=(
+                "Taxa de acerto nas questões feitas em atividades do período filtrado. "
+                "Fórmula: (acertos ÷ questões feitas) × 100. "
+                "≥ 70% = satisfatório para concursos. "
+                "Filtros ativos: aluno, disciplina, tipo, período."
+            ),
+        ),
+        kpi_card(
+            "Questões feitas", f"{q:,}".replace(",", "."),
+            "no período e filtros selecionados",
+            tooltip=(
+                "Soma de qtd_questoes_feitas em todas as execuções iniciadas/concluídas "
+                "dentro dos filtros selecionados. "
+                "Quanto mais questões, maior o treino e a familiarização com o estilo das provas."
+            ),
+        ),
+        kpi_card(
+            "Concluídas", f"{conc}",
+            f"de {total} tarefas no período filtrado",
+            tooltip=(
+                "Quantidade de tarefas com status CONCLUIDA dentro do período e filtros selecionados. "
+                f"Fórmula: contagem de execuções com status=CONCLUIDA. "
+                "Filtros ativos: aluno, disciplina, tipo, período de datas."
+            ),
+        ),
+        kpi_card(
+            "Dias ativos", f"{kpis['qtd_dias_ativos']}",
+            "dias com pelo menos 1 registro",
+            tooltip=(
+                "Número de dias distintos com pelo menos uma execução registrada no período filtrado. "
+                "Indica frequência e consistência. "
+                "Maior número de dias = hábito de estudo mais sólido."
+            ),
+        ),
     ]
     for col, card in zip(cols, cards):
-        with col: render_html(card)
+        with col:
+            render_html(card)
 
 
 def _aba_visao_geral(df_filtrado, analisavel):
@@ -2199,43 +2385,80 @@ def _aba_visao_geral(df_filtrado, analisavel):
             st.plotly_chart(grafico_vazio("Sem atividades para comparação."), use_container_width=True)
 
 
-def _aba_disciplinas(analisavel):
+def _aba_disciplinas(analisavel, df_total=None):
+    """
+    df_total = df filtrado completo (todos os status).
+    analisavel = apenas Em andamento + Concluídas (para horas/questões/acertos).
+    Progresso usa df_total para incluir tarefas Não iniciadas no denominador.
+    """
     if analisavel.empty:
         st.info("Sem dados analisáveis."); return
-    disc = analisavel.groupby("disciplina", as_index=False).agg(
-        tarefas=("tarefa_id","count"), horas=("ch_efetiva","sum"),
-        questoes=("qtd_questoes_feitas","sum"), acertos=("qtd_acertos","sum"),
-        concluidas=("status", lambda s:(s==STATUS_CONCLUIDA).sum()),
+
+    # Usa df_total quando disponível para progresso correto; senão cai em analisavel
+    df_prog = df_total if df_total is not None and not df_total.empty else analisavel
+
+    # Progresso: todos os status por disciplina
+    prog = df_prog.groupby("disciplina", as_index=False).agg(
+        total_disc=("tarefa_id", "count"),
+        concl_disc=("status", lambda s: (s == STATUS_CONCLUIDA).sum()),
     )
-    disc["progresso"]  = disc.apply(lambda r: r["concluidas"]/r["tarefas"]*100 if r["tarefas"] else 0, axis=1)
-    disc["desempenho"] = disc.apply(lambda r: r["acertos"]/r["questoes"]*100 if r["questoes"] else 0, axis=1)
+    prog["progresso"] = prog.apply(
+        lambda r: r["concl_disc"] / r["total_disc"] * 100 if r["total_disc"] else 0, axis=1
+    )
+
+    # Horas / questões / desempenho: apenas analisável
+    perf = analisavel.groupby("disciplina", as_index=False).agg(
+        horas=("ch_efetiva", "sum"),
+        questoes=("qtd_questoes_feitas", "sum"),
+        acertos=("qtd_acertos", "sum"),
+        tarefas_anal=("tarefa_id", "count"),
+    )
+    perf["desempenho"] = perf.apply(
+        lambda r: r["acertos"] / r["questoes"] * 100 if r["questoes"] else 0, axis=1
+    )
+
+    disc = prog.merge(perf, on="disciplina", how="left").fillna(0)
+
     col_a, col_b = st.columns(2)
     with col_a:
         render_html(_tooltip_grafico(
             "Barra horizontal mostrando o % de tarefas concluídas por disciplina. "
-            "Verde ≥ 80% · Amarelo 40–79% · Vermelho < 40%. "
-            "Fórmula: (tarefas concluídas ÷ total de tarefas) × 100."
+            "Denominador = TODAS as tarefas da disciplina (concluídas + em andamento + não iniciadas). "
+            "Fórmula: (concluídas ÷ total) × 100. "
+            "Verde ≥ 80% · Amarelo 40–79% · Vermelho < 40%."
         ))
         d = disc.sort_values("progresso")
         fig = go.Figure(go.Bar(
             x=d["progresso"], y=d["disciplina"], orientation="h",
             text=d["progresso"].map(lambda v: f"{v:.0f}%"), textposition="outside",
-            marker_color=d["progresso"].map(lambda v: "#22c55e" if v>=80 else ("#f59e0b" if v>=40 else "#ef4444")),
+            marker_color=d["progresso"].map(
+                lambda v: "#22c55e" if v >= 80 else ("#f59e0b" if v >= 40 else "#ef4444")
+            ),
         ))
-        fig.update_layout(title="Progresso por disciplina (%)")
-        st.plotly_chart(fig_layout(fig, max(280, len(disc)*36)), use_container_width=True)
+        fig.update_layout(title="Progresso por disciplina (% de tarefas concluídas)")
+        st.plotly_chart(fig_layout(fig, max(280, len(disc) * 36)), use_container_width=True)
+
     with col_b:
         render_html(_tooltip_grafico(
             "Barras = horas estudadas (eixo esquerdo). "
-            "Linha = taxa de acerto em questões, eixo direito (0–100%). "
+            "Linha = taxa de acerto em questões (eixo direito, 0–100%). "
             "Disciplinas com muitas horas e baixo desempenho indicam estudo ineficiente."
         ))
         fig = go.Figure()
-        fig.add_trace(go.Bar(name="Horas", x=disc["disciplina"], y=disc["horas"], marker_color="#3b82f6"))
-        fig.add_trace(go.Scatter(name="Desempenho (%)", x=disc["disciplina"], y=disc["desempenho"],
-            mode="lines+markers", marker_color="#f59e0b", yaxis="y2", line=dict(width=2)))
-        fig.update_layout(title="Horas × Desempenho", yaxis2=dict(overlaying="y", side="right", range=[0,100]))
+        fig.add_trace(go.Bar(
+            name="Horas", x=disc["disciplina"], y=disc["horas"], marker_color="#3b82f6"
+        ))
+        fig.add_trace(go.Scatter(
+            name="Desempenho (%)", x=disc["disciplina"], y=disc["desempenho"],
+            mode="lines+markers", marker_color="#f59e0b",
+            yaxis="y2", line=dict(width=2),
+        ))
+        fig.update_layout(
+            title="Horas × Desempenho",
+            yaxis2=dict(overlaying="y", side="right", range=[0, 100]),
+        )
         st.plotly_chart(fig_layout(fig, 300), use_container_width=True)
+
     if len(disc) >= 3:
         render_html(_tooltip_grafico(
             "Radar comparando a taxa de acerto (%) de cada disciplina. "
@@ -2243,14 +2466,26 @@ def _aba_disciplinas(analisavel):
             "Áreas retraídas indicam onde concentrar esforços de revisão."
         ))
         fig_r = go.Figure(go.Scatterpolar(
-            r=disc["desempenho"].tolist()+[disc["desempenho"].tolist()[0]],
-            theta=disc["disciplina"].tolist()+[disc["disciplina"].tolist()[0]],
+            r=disc["desempenho"].tolist() + [disc["desempenho"].tolist()[0]],
+            theta=disc["disciplina"].tolist() + [disc["disciplina"].tolist()[0]],
             fill="toself", fillcolor="rgba(59,130,246,0.15)",
             line=dict(color="#3b82f6", width=2),
         ))
-        fig_r.update_layout(title="Radar de desempenho", polar=dict(radialaxis=dict(visible=True, range=[0,100])), showlegend=False)
+        fig_r.update_layout(
+            title="Radar de desempenho",
+            polar=dict(radialaxis=dict(visible=True, range=[0, 100])),
+            showlegend=False,
+        )
         st.plotly_chart(fig_layout(fig_r, 360), use_container_width=True)
-    st.dataframe(disc.rename(columns={"progresso":"Progresso (%)","desempenho":"Desempenho (%)","horas":"Horas","questoes":"Questões","acertos":"Acertos","tarefas":"Tarefas","concluidas":"Concluídas"}), use_container_width=True, hide_index=True)
+
+    st.dataframe(
+        disc.rename(columns={
+            "progresso": "Progresso (%)", "desempenho": "Desempenho (%)",
+            "horas": "Horas", "questoes": "Questões", "acertos": "Acertos",
+            "total_disc": "Total tarefas", "concl_disc": "Concluídas",
+        }),
+        use_container_width=True, hide_index=True,
+    )
 
 
 def _aba_evolucao(analisavel):
@@ -2488,37 +2723,70 @@ def _titulo_secao(label: str, tooltip: str = "", periodo: str = "") -> None:
 
 
 def _resumo_7dias(df_total: pd.DataFrame) -> None:
-    """Bloco de KPIs dos últimos 7 dias com labels e tooltips."""
-    hoje   = date.today()
-    ini7   = hoje - timedelta(days=6)
-    df7    = df_total[df_total["data_ref"].dt.date >= ini7].copy()
-    ana7   = df7[df7["status"].isin(STATUS_ANALISE)]
+    """Bloco de KPIs calculado exclusivamente sobre os últimos 7 dias."""
+    hoje  = date.today()
+    ini7  = hoje - timedelta(days=6)
+    df7   = df_total[df_total["data_ref"].dt.date >= ini7].copy()
+    ana7  = df7[df7["status"].isin(STATUS_ANALISE)]
 
-    h7     = float(ana7["ch_efetiva"].sum())
-    q7     = int(ana7["qtd_questoes_feitas"].sum())
-    ac7    = int(ana7["qtd_acertos"].sum())
-    des7   = ac7 / q7 * 100 if q7 else 0
-    conc7  = int((ana7["status"] == STATUS_CONCLUIDA).sum())
-    dias7  = ana7["data_ref"].dropna().dt.date.nunique()
+    h7    = float(ana7["ch_efetiva"].sum())
+    q7    = int(ana7["qtd_questoes_feitas"].sum())
+    ac7   = int(ana7["qtd_acertos"].sum())
+    des7  = ac7 / q7 * 100 if q7 else 0
+    conc7 = int((ana7["status"] == STATUS_CONCLUIDA).sum())
+    dias7 = ana7["data_ref"].dropna().dt.date.nunique()
 
     _titulo_secao(
         "Últimos 7 dias",
         "Indicadores calculados apenas com execuções dos últimos 7 dias (hoje inclusive). "
-        "Útil para monitorar o ritmo recente independente do histórico total.",
+        "Útil para monitorar o ritmo recente independente do histórico total. "
+        "Não é afetado pelo filtro de período — sempre considera os 7 dias anteriores à data de hoje.",
         "Últimos 7 dias",
     )
-    cols = st.columns(5)
+    cols  = st.columns(5)
     cards = [
-        kpi_card("Horas estudadas", f"{h7:.1f}h", f"{dias7} dia(s) com registro",
-            tooltip="Total de horas de estudo registradas nos últimos 7 dias. Inclui atividades Em andamento e Concluídas."),
-        kpi_card("Questões feitas", f"{q7}", "nos últimos 7 dias",
-            tooltip="Soma de todas as questões resolvidas em atividades iniciadas ou concluídas nos últimos 7 dias."),
-        kpi_card("Acertos", f"{ac7}", f"de {q7} questões",
-            tooltip="Total de questões acertadas nos últimos 7 dias. Fórmula: soma de qtd_acertos das execuções do período."),
-        kpi_card("Desempenho", f"{des7:.1f}%", "taxa de acerto (7d)",
-            tooltip="Taxa de acerto nos últimos 7 dias. Fórmula: (acertos ÷ questões) × 100. Acima de 70% é satisfatório para concursos."),
-        kpi_card("Tarefas concluídas", f"{conc7}", "nos últimos 7 dias",
-            tooltip="Quantidade de tarefas marcadas como Concluída com data de execução nos últimos 7 dias."),
+        kpi_card(
+            "Horas (7d)", f"{h7:.1f}h",
+            f"{dias7} dia(s) com registro",
+            tooltip=(
+                "Total de horas de estudo nos últimos 7 dias. "
+                "Inclui atividades Em andamento e Concluídas. "
+                "Filtros de aluno e disciplina são respeitados; filtro de período não se aplica aqui."
+            ),
+        ),
+        kpi_card(
+            "Questões (7d)", f"{q7}",
+            "nos últimos 7 dias",
+            tooltip=(
+                "Soma de questões feitas em execuções com data nos últimos 7 dias. "
+                "Fórmula: soma de qtd_questoes_feitas das execuções do período."
+            ),
+        ),
+        kpi_card(
+            "Acertos (7d)", f"{ac7}",
+            f"de {q7} questões",
+            tooltip=(
+                "Total de acertos nos últimos 7 dias. "
+                "Fórmula: soma de qtd_acertos das execuções dos últimos 7 dias."
+            ),
+        ),
+        kpi_card(
+            "Desempenho (7d)", f"{des7:.1f}%",
+            "taxa de acerto 7 dias",
+            tooltip=(
+                "Taxa de acerto nos últimos 7 dias. "
+                "Fórmula: (acertos ÷ questões) × 100. "
+                "Acima de 70% é satisfatório para concursos."
+            ),
+        ),
+        kpi_card(
+            "Concluídas (7d)", f"{conc7}",
+            "tarefas concluídas em 7 dias",
+            tooltip=(
+                "Quantidade de tarefas marcadas como Concluída "
+                "com data de execução nos últimos 7 dias."
+            ),
+        ),
     ]
     for col, card in zip(cols, cards):
         with col:
@@ -2596,8 +2864,8 @@ def dashboard():
     with abas[1]:
         _titulo_secao("Análise por disciplina",
             "Progresso e desempenho separados por disciplina. "
-            "Identifica quais áreas estão avançando bem e quais precisam de mais atenção.")
-        _aba_disciplinas(analisavel)
+            "O progresso considera TODAS as tarefas da disciplina (concluídas + em andamento + não iniciadas).")
+        _aba_disciplinas(analisavel, df_total=df_filtrado)
 
     with abas[2]:
         _titulo_secao("Evolução temporal",
@@ -2968,12 +3236,13 @@ def _renderizar_secao_registro(
 
     # ── Gravação ──
     try:
-        with conectar() as conn:
-            upsert_execucao(
-                conn, aluno_id, int(tarefa_id), str(data_estudo),
-                ch, None, 0, acertos, limpar_texto(comentario),
-                questoes, novo_status, tipo_estudo,
-            )
+        with st.spinner("Salvando registro…"):
+            with conectar() as conn:
+                upsert_execucao(
+                    conn, aluno_id, int(tarefa_id), str(data_estudo),
+                    ch, None, 0, acertos, limpar_texto(comentario),
+                    questoes, novo_status, tipo_estudo,
+                )
         limpar_cache()
 
         status_ant = STATUS_LABELS.get(status_atual, status_atual)
@@ -3164,7 +3433,8 @@ def tela_tarefas():
         )
         if st.button("Salvar alterações de execução", type="primary"):
             try:
-                with conectar() as conn:
+                with st.spinner("Salvando…"):
+                 with conectar() as conn:
                     for _, row in editado.iterrows():
                         if converter_inteiro(row["qtd_acertos"]) > converter_inteiro(row["qtd_questoes_feitas"]):
                             raise ValueError(f"Tarefa {row['tarefa']}: acertos maiores que questões.")
@@ -3409,7 +3679,8 @@ def tela_disciplinas():
             editado = st.data_editor(df, use_container_width=True, hide_index=True, disabled=["id"], key="editor_disciplinas")
             col1, col2 = st.columns(2)
             if col1.button("Salvar disciplinas", type="primary"):
-                with conectar() as conn:
+                with st.spinner("Salvando…"):
+                 with conectar() as conn:
                     for _, row in editado.iterrows():
                         conn.execute("UPDATE disciplinas SET nome = ? WHERE id = ?", (limpar_texto(row["nome"]), int(row["id"])))
                 limpar_cache()
@@ -3466,7 +3737,8 @@ def tela_alunos():
             col1, col2 = st.columns([2, 1])
             if col1.button("💾 Salvar alterações", type="primary"):
                 try:
-                    with conectar() as conn:
+                    with st.spinner("Salvando…"):
+                     with conectar() as conn:
                         for _, row in editado.iterrows():
                             conn.execute(
                                 "UPDATE alunos SET nome = ?, email = ? WHERE id = ? AND perfil = 'Aluno'",
@@ -3700,11 +3972,15 @@ def tela_importacao():
             destino = BASE_DIR / "planilha_referencia_importada.xlsx"
             destino.write_bytes(arquivo.getbuffer())
             if st.button("Importar referência enviada", type="primary", key="ref_envio"):
-                if importar_planilha_referencia(destino):
+                with st.spinner("Importando planilha de referência…"):
+                    ok = importar_planilha_referencia(destino)
+                if ok:
                     _toast_sucesso("Planilha de referência importada com sucesso. Histórico preservado.")
                     st.rerun()
         elif st.button("Reimportar referência padrão", key="ref_padrao"):
-            if importar_planilha_referencia(PLANILHA_REFERENCIA):
+            with st.spinner("Importando planilha padrão…"):
+                ok = importar_planilha_referencia(PLANILHA_REFERENCIA)
+            if ok:
                 _toast_sucesso("Planilha de referência padrão importada com sucesso. Histórico preservado.")
                 st.rerun()
 
@@ -3766,7 +4042,7 @@ def tela_importacao():
                 pass
 
             if col_btn.button("▶ Importar", type="primary", use_container_width=True, key="cc_importar"):
-                with st.spinner("Importando…"):
+                with st.spinner("Importando Ciclo Consolidado… aguarde."):
                     resultado = importar_ciclo_consolidado(destino_cc, modo=modo)
 
                 if resultado["erros"]:
