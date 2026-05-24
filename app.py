@@ -1861,21 +1861,23 @@ def painel_filtros(df, prefixo="dash"):
         escopo = escopo[escopo["tipo"].isin(tipo)]
 
     # ── Filtros temporais (com período) ──
-    # Usados para: horas, questões, acertos, desempenho, tarefas concluídas no período.
     # Aplica período apenas sobre registros que têm data de execução.
+    # Tarefas sem data (Não iniciadas) passam pelo filtro sem serem excluídas.
     periodo_df = escopo.copy()
-    if inicio:
-        # Inclui tarefas sem data (Não iniciadas) mesmo com período ativo:
-        # filtra por data SOMENTE quando há data registrada, senão mantém
+
+    # Converte inicio/fim para Timestamp para comparação segura com datetime64
+    ts_inicio = pd.Timestamp(inicio) if inicio else None
+    ts_fim    = pd.Timestamp(fim)    if fim    else None
+
+    if ts_inicio:
         sem_data = periodo_df["data_ref"].isna()
-        com_data = periodo_df["data_ref"].notna() & (periodo_df["data_ref"].dt.date >= inicio)
+        com_data = periodo_df["data_ref"].notna() & (periodo_df["data_ref"] >= ts_inicio)
         periodo_df = periodo_df[sem_data | com_data]
-    if fim:
+    if ts_fim:
         sem_data = periodo_df["data_ref"].isna()
-        com_data = periodo_df["data_ref"].notna() & (periodo_df["data_ref"].dt.date <= fim)
+        com_data = periodo_df["data_ref"].notna() & (periodo_df["data_ref"] <= ts_fim + pd.Timedelta(days=1) - pd.Timedelta(seconds=1))
         periodo_df = periodo_df[sem_data | com_data]
     if minimo_horas > 0:
-        # Aplica mínimo de horas apenas sobre registros que têm hora registrada
         periodo_df = periodo_df[
             periodo_df["data_ref"].isna() | (periodo_df["ch_efetiva"] >= minimo_horas)
         ]
