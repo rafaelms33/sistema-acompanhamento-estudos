@@ -1769,6 +1769,16 @@ def periodo_datas(periodo):
 
 
 def painel_filtros(df, prefixo="dash"):
+    """
+    Retorna quatro valores:
+        df_escopo   – filtrado por aluno/disciplina/status/aula/assunto/tipo
+                      SEM filtro de período. Usado para contagens estruturais:
+                      total de tarefas, progresso, restantes, em andamento.
+        df_periodo  – df_escopo com filtro de período e mínimo de horas aplicado.
+                      Usado para métricas temporais: horas, questões, acertos.
+        visao       – nome do aluno selecionado (ou "Todos")
+        inicio, fim – datas do período selecionado (ou None)
+    """
     st.sidebar.markdown("### Filtros")
     if st.sidebar.button("Limpar filtros", use_container_width=True, key=f"{prefixo}_limpar"):
         for chave in list(st.session_state.keys()):
@@ -1790,12 +1800,12 @@ def painel_filtros(df, prefixo="dash"):
     inicio_padrao, fim_padrao = periodo_datas(periodo)
     if periodo == "Personalizado":
         inicio = st.sidebar.date_input("Data inicial", value=inicio_padrao or date.today(), key=f"{prefixo}_inicio")
-        fim = st.sidebar.date_input("Data final", value=fim_padrao or date.today(), key=f"{prefixo}_fim")
+        fim    = st.sidebar.date_input("Data final",   value=fim_padrao   or date.today(), key=f"{prefixo}_fim")
     else:
         inicio, fim = inicio_padrao, fim_padrao
 
     usuario = aluno_logado()
-    alunos = ["Todos"] + sorted(df["aluno"].dropna().unique().tolist())
+    alunos  = ["Todos"] + sorted(df["aluno"].dropna().unique().tolist())
     if usuario["perfil"] == "Aluno":
         aluno = usuario["nome"]
         st.sidebar.text_input("Aluno", value=aluno, disabled=True)
@@ -1811,12 +1821,15 @@ def painel_filtros(df, prefixo="dash"):
         "Status", STATUS_VALIDOS, default=STATUS_VALIDOS,
         format_func=lambda v: STATUS_LABELS.get(v, v), key=f"{prefixo}_status",
     )
-    disciplina    = st.sidebar.multiselect("Disciplinas", disciplinas, key=f"{prefixo}_disciplina")
-    aula          = st.sidebar.multiselect("Aulas", aulas, key=f"{prefixo}_aula")
-    assunto       = st.sidebar.multiselect("Assuntos", assuntos, key=f"{prefixo}_assunto")
-    tipo          = st.sidebar.multiselect("Tipos de estudo", tipos, key=f"{prefixo}_tipo")
-    minimo_horas  = st.sidebar.number_input("Tempo mínimo estudado (h)", min_value=0.0, value=0.0, step=0.25, format="%.2f", key=f"{prefixo}_min_horas")
-    recentes      = st.sidebar.toggle("Atividades recentes", value=False, key=f"{prefixo}_recentes")
+    disciplina   = st.sidebar.multiselect("Disciplinas",     disciplinas, key=f"{prefixo}_disciplina")
+    aula         = st.sidebar.multiselect("Aulas",           aulas,       key=f"{prefixo}_aula")
+    assunto      = st.sidebar.multiselect("Assuntos",        assuntos,    key=f"{prefixo}_assunto")
+    tipo         = st.sidebar.multiselect("Tipos de estudo", tipos,       key=f"{prefixo}_tipo")
+    minimo_horas = st.sidebar.number_input(
+        "Tempo mínimo estudado (h)", min_value=0.0, value=0.0,
+        step=0.25, format="%.2f", key=f"{prefixo}_min_horas",
+    )
+    recentes = st.sidebar.toggle("Atividades recentes (15d)", value=False, key=f"{prefixo}_recentes")
 
     nome_filtro = st.sidebar.text_input("Nome para salvar filtro", key=f"{prefixo}_nome_filtro")
     if st.sidebar.button("Salvar filtro favorito", use_container_width=True, key=f"{prefixo}_salvar_filtro"):
@@ -1828,30 +1841,51 @@ def painel_filtros(df, prefixo="dash"):
             }
             _toast_sucesso("Filtro salvo como favorito.")
 
-    filtrado = df.copy()
-    filtrado["data_ref"] = pd.to_datetime(filtrado["data_execucao"], errors="coerce")
-    if inicio:
-        filtrado = filtrado[filtrado["data_ref"].dt.date >= inicio]
-    if fim:
-        filtrado = filtrado[filtrado["data_ref"].dt.date <= fim]
+    # ── Filtros estruturais (sem período) ──
+    # Usados para: total de tarefas, progresso, restantes, em andamento.
+    # Tarefas sem data de execução (Não iniciadas) NÃO desaparecem aqui.
+    escopo = df.copy()
+    escopo["data_ref"] = pd.to_datetime(escopo["data_execucao"], errors="coerce")
+
     if aluno != "Todos":
-        filtrado = filtrado[filtrado["aluno"] == aluno]
+        escopo = escopo[escopo["aluno"] == aluno]
     if status_escolhidos:
-        filtrado = filtrado[filtrado["status"].isin(status_escolhidos)]
+        escopo = escopo[escopo["status"].isin(status_escolhidos)]
     if disciplina:
-        filtrado = filtrado[filtrado["disciplina"].isin(disciplina)]
+        escopo = escopo[escopo["disciplina"].isin(disciplina)]
     if aula:
-        filtrado = filtrado[filtrado["aula"].isin(aula)]
+        escopo = escopo[escopo["aula"].isin(aula)]
     if assunto:
-        filtrado = filtrado[filtrado["assunto"].isin(assunto)]
+        escopo = escopo[escopo["assunto"].isin(assunto)]
     if tipo:
-        filtrado = filtrado[filtrado["tipo"].isin(tipo)]
+        escopo = escopo[escopo["tipo"].isin(tipo)]
+
+    # ── Filtros temporais (com período) ──
+    # Usados para: horas, questões, acertos, desempenho, tarefas concluídas no período.
+    # Aplica período apenas sobre registros que têm data de execução.
+    periodo_df = escopo.copy()
+    if inicio:
+        # Inclui tarefas sem data (Não iniciadas) mesmo com período ativo:
+        # filtra por data SOMENTE quando há data registrada, senão mantém
+        sem_data = periodo_df["data_ref"].isna()
+        com_data = periodo_df["data_ref"].notna() & (periodo_df["data_ref"].dt.date >= inicio)
+        periodo_df = periodo_df[sem_data | com_data]
+    if fim:
+        sem_data = periodo_df["data_ref"].isna()
+        com_data = periodo_df["data_ref"].notna() & (periodo_df["data_ref"].dt.date <= fim)
+        periodo_df = periodo_df[sem_data | com_data]
     if minimo_horas > 0:
-        filtrado = filtrado[filtrado["ch_efetiva"] >= minimo_horas]
+        # Aplica mínimo de horas apenas sobre registros que têm hora registrada
+        periodo_df = periodo_df[
+            periodo_df["data_ref"].isna() | (periodo_df["ch_efetiva"] >= minimo_horas)
+        ]
     if recentes:
-        limite = pd.Timestamp.now() - pd.Timedelta(days=15)
-        filtrado = filtrado[filtrado["data_ref"] >= limite]
-    return filtrado, aluno, inicio, fim
+        limite    = pd.Timestamp.now() - pd.Timedelta(days=15)
+        sem_data  = periodo_df["data_ref"].isna()
+        com_data  = periodo_df["data_ref"].notna() & (periodo_df["data_ref"] >= limite)
+        periodo_df = periodo_df[sem_data | com_data]
+
+    return escopo, periodo_df, aluno, inicio, fim
 
 
 def base_metricas(df):
@@ -1874,56 +1908,61 @@ def dias_uteis_no_periodo(inicio: date | None, fim: date | None) -> int:
     return total
 
 
-def calcular_kpis_avancados(df: pd.DataFrame,
-                             inicio_periodo: date | None = None,
-                             fim_periodo: date | None = None) -> dict:
+def calcular_kpis_avancados(
+    df_escopo: pd.DataFrame,
+    df_periodo: pd.DataFrame,
+    inicio_periodo=None,
+    fim_periodo=None,
+) -> dict:
     """
-    Calcula todos os KPIs analíticos de forma centralizada.
+    Calcula todos os KPIs com responsabilidades separadas por DataFrame.
 
-    Parâmetros:
-        df              – DataFrame já filtrado (todos os status, período e aluno).
-        inicio_periodo  – Data inicial do filtro ativo (pode ser None = "Todos").
-        fim_periodo     – Data final do filtro ativo (pode ser None = "Todos").
+    df_escopo  → filtrado por aluno/disciplina/status/aula/tipo SEM período.
+                 Fonte para: total de tarefas, progresso, restantes, em andamento.
+                 Tarefas Não iniciadas (sem data) nunca desaparecem por filtro de período.
 
-    Regras de cálculo:
-    - total_tarefas: todas as linhas do df filtrado (todos os status).
-    - pct_conclusao:  concluídas ÷ total_tarefas × 100.
-    - media_diaria:   horas_total ÷ dias_úteis_do_período (seg–sex), não por dias com registro.
-    - Previsão:       ritmo médio de tarefas concluídas por semana (últimas 8 semanas com dado).
-    - conc_periodo:   todas as concluídas no df filtrado.
+    df_periodo → df_escopo com período aplicado APENAS em registros com data.
+                 Tarefas sem data (Não iniciadas) permanecem.
+                 Fonte para: horas, questões, acertos, desempenho, concluídas no período.
+
+    Esta separação garante coerência entre todos os cards, gráficos e KPIs.
     """
     hoje       = date.today()
     semana_ini = hoje - timedelta(days=hoje.weekday())
     semana_pas = semana_ini - timedelta(days=7)
 
-    df = df.copy()
-    df["data_ref"] = pd.to_datetime(
-        df.get("data_execucao", pd.Series(dtype=str)), errors="coerce"
-    )
+    for _df in [df_escopo, df_periodo]:
+        if "data_ref" not in _df.columns:
+            _df["data_ref"] = pd.to_datetime(
+                _df.get("data_execucao", pd.Series(dtype=str)), errors="coerce"
+            )
 
-    analisavel = df[df["status"].isin(STATUS_ANALISE)].copy()
-    concluidas = analisavel[analisavel["status"] == STATUS_CONCLUIDA]
-    andamento  = analisavel[analisavel["status"] == STATUS_EM_ANDAMENTO]
-    nao_inic   = df[df["status"] == STATUS_NAO_INICIADA]
+    # ── Estruturais — escopo total sem período ──
+    esc_conc = df_escopo[df_escopo["status"] == STATUS_CONCLUIDA]
+    esc_and  = df_escopo[df_escopo["status"] == STATUS_EM_ANDAMENTO]
+    esc_nao  = df_escopo[df_escopo["status"] == STATUS_NAO_INICIADA]
+    esc_anal = df_escopo[df_escopo["status"].isin(STATUS_ANALISE)].copy()
 
-    total_tarefas_banco = len(df)
-    qtd_concluidas      = len(concluidas)
-    qtd_andamento       = len(andamento)
-    qtd_nao_iniciada    = len(nao_inic)
-    pct_conclusao       = qtd_concluidas / total_tarefas_banco * 100 if total_tarefas_banco else 0
+    total_tarefas    = len(df_escopo)
+    qtd_concluidas   = len(esc_conc)
+    qtd_andamento    = len(esc_and)
+    qtd_nao_iniciada = len(esc_nao)
+    pct_conclusao    = qtd_concluidas / total_tarefas * 100 if total_tarefas else 0
+    tarefas_rest     = qtd_andamento + qtd_nao_iniciada
 
-    horas_total = float(analisavel["ch_efetiva"].sum())
-    questoes    = int(analisavel["qtd_questoes_feitas"].sum())
-    acertos     = int(analisavel["qtd_acertos"].sum())
+    # ── Temporais — período filtrado ──
+    per_anal = df_periodo[df_periodo["status"].isin(STATUS_ANALISE)].copy()
+    per_conc = per_anal[per_anal["status"] == STATUS_CONCLUIDA]
+
+    horas_total = float(per_anal["ch_efetiva"].sum())
+    questoes    = int(per_anal["qtd_questoes_feitas"].sum())
+    acertos     = int(per_anal["qtd_acertos"].sum())
     desempenho  = acertos / questoes * 100 if questoes else 0
 
-    # Dias ativos (com pelo menos 1 registro)
-    dias_ativos_series = analisavel["data_ref"].dropna().dt.date
+    dias_ativos_series = per_anal["data_ref"].dropna().dt.date
     dias_unicos        = sorted(set(dias_ativos_series.tolist()))
     qtd_dias           = len(dias_unicos)
 
-    # ── Média diária por dias ÚTEIS do período selecionado ──
-    # Se não há período definido, usa intervalo real dos dados
     _ini = inicio_periodo or (min(dias_unicos) if dias_unicos else None)
     _fim = fim_periodo    or (max(dias_unicos) if dias_unicos else None)
     dias_uteis = dias_uteis_no_periodo(_ini, _fim)
@@ -1934,19 +1973,19 @@ def calcular_kpis_avancados(df: pd.DataFrame,
         f"{dias_uteis} dia(s) útil(eis) no período"
     )
 
-    # Semana atual e anterior
-    exec_semana   = analisavel[analisavel["data_ref"].dt.date >= semana_ini]
+    # Semana atual e anterior — sempre sobre escopo total (para insights consistentes)
+    exec_semana   = esc_anal[esc_anal["data_ref"].dt.date >= semana_ini]
     horas_semana  = float(exec_semana["ch_efetiva"].sum())
     conc_semana   = int((exec_semana["status"] == STATUS_CONCLUIDA).sum())
-    exec_sem_pas  = analisavel[
-        (analisavel["data_ref"].dt.date >= semana_pas) &
-        (analisavel["data_ref"].dt.date < semana_ini)
+    exec_sem_pas  = esc_anal[
+        (esc_anal["data_ref"].dt.date >= semana_pas) &
+        (esc_anal["data_ref"].dt.date < semana_ini)
     ]
     horas_sem_pas = float(exec_sem_pas["ch_efetiva"].sum())
     conc_sem_pas  = int((exec_sem_pas["status"] == STATUS_CONCLUIDA).sum())
-    conc_periodo  = qtd_concluidas
+    conc_periodo  = len(per_conc)
 
-    # Sequência
+    # Sequência e dias sem estudar (sobre escopo total)
     sequencia = 0
     if dias_unicos:
         d = hoje
@@ -1957,51 +1996,50 @@ def calcular_kpis_avancados(df: pd.DataFrame,
 
     produtividade = qtd_concluidas / horas_total if horas_total else 0
 
-    # Previsão de conclusão
-    tarefas_rest  = qtd_andamento + qtd_nao_iniciada
+    # Previsão — ritmo baseado no período, restantes baseados no escopo
     previsao      = None
     ritmo_semanal = 0.0
     previsao_base = ""
-
-    if not concluidas.empty and "data_ref" in concluidas.columns:
-        conc_data = concluidas.dropna(subset=["data_ref"]).copy()
-        if not conc_data.empty:
-            conc_data["semana"] = conc_data["data_ref"].dt.to_period("W")
-            por_semana    = conc_data.groupby("semana").size()
-            ultimas       = por_semana.tail(8)
-            if len(ultimas) >= 1:
-                ritmo_semanal = float(ultimas.mean())
+    conc_com_data = per_conc.dropna(subset=["data_ref"]).copy()
+    if not conc_com_data.empty:
+        conc_com_data["semana"] = conc_com_data["data_ref"].dt.to_period("W")
+        por_semana    = conc_com_data.groupby("semana").size()
+        ultimas       = por_semana.tail(8)
+        if len(ultimas) >= 1:
+            ritmo_semanal = float(ultimas.mean())
 
     if tarefas_rest == 0:
-        previsao_base = "Todas as tarefas já concluídas no período filtrado."
+        previsao_base = "Todas as tarefas do escopo já estão concluídas."
     elif ritmo_semanal > 0:
         semanas_rest  = tarefas_rest / ritmo_semanal
         previsao      = hoje + timedelta(weeks=semanas_rest)
         previsao_base = (
-            f"Ritmo médio: {ritmo_semanal:.1f} tarefas/semana "
-            f"· {tarefas_rest} tarefa(s) restante(s) "
+            f"Ritmo médio (período): {ritmo_semanal:.1f} tarefas/semana "
+            f"· {tarefas_rest} restante(s) "
             f"· Estimativa: {previsao.strftime('%d/%m/%Y')}."
         )
     else:
-        previsao_base = "Dados insuficientes: nenhuma tarefa concluída com data registrada."
+        previsao_base = "Dados insuficientes: sem tarefas concluídas com data no período selecionado."
 
     media_h_tarefa  = horas_total / qtd_concluidas if qtd_concluidas else 0
     horas_restantes = tarefas_rest * media_h_tarefa
 
     return {
-        "analisavel":           analisavel,
-        "concluidas_df":        concluidas,
-        "andamento_df":         andamento,
-        "total_tarefas":        total_tarefas_banco,
+        "analisavel":           per_anal,
+        "concluidas_df":        per_conc,
+        "andamento_df":         esc_and,
+        "escopo_analisavel":    esc_anal,
+        "total_tarefas":        total_tarefas,
         "qtd_concluidas":       qtd_concluidas,
         "qtd_andamento":        qtd_andamento,
         "qtd_nao_iniciada":     qtd_nao_iniciada,
         "pct_conclusao":        pct_conclusao,
+        "tarefas_restantes":    tarefas_rest,
         "horas_total":          horas_total,
+        "conc_periodo":         conc_periodo,
         "horas_semana":         horas_semana,
         "horas_sem_pas":        horas_sem_pas,
         "delta_horas_semana":   horas_semana - horas_sem_pas,
-        "conc_periodo":         conc_periodo,
         "conc_semana":          conc_semana,
         "conc_sem_pas":         conc_sem_pas,
         "delta_conc_semana":    conc_semana - conc_sem_pas,
@@ -2016,17 +2054,17 @@ def calcular_kpis_avancados(df: pd.DataFrame,
         "dias_sem_estudar":     dias_sem_estudar,
         "produtividade":        produtividade,
         "ritmo_semanal":        ritmo_semanal,
-        "tarefas_restantes":    tarefas_rest,
         "previsao_conclusao":   previsao,
         "previsao_base":        previsao_base,
         "horas_restantes":      horas_restantes,
         "dias_unicos":          dias_unicos,
     }
 
-
-def calcular_metricas(df, inicio_periodo=None, fim_periodo=None):
-    """Compatível com código legado."""
-    k = calcular_kpis_avancados(df, inicio_periodo, fim_periodo)
+def calcular_metricas(df_escopo, df_periodo=None, inicio_periodo=None, fim_periodo=None):
+    """Compatível com código legado. Se df_periodo não for fornecido, usa df_escopo."""
+    if df_periodo is None:
+        df_periodo = df_escopo
+    k = calcular_kpis_avancados(df_escopo, df_periodo, inicio_periodo, fim_periodo)
     return {
         "analisavel": k["analisavel"], "concluidas_df": k["concluidas_df"],
         "andamento_df": k["andamento_df"], "total": k["total_tarefas"],
@@ -2695,15 +2733,17 @@ def _aba_ranking(analisavel):
         use_container_width=True, hide_index=True)
 
 
-def _aba_analise_ia(df_filtrado, visao, kpis):
+def _aba_analise_ia(df_escopo, df_periodo, visao, kpis):
     analisavel = kpis["analisavel"]
     if analisavel.empty:
         st.info("Sem atividades para análise."); return
     alunos_lista = sorted(analisavel["aluno"].dropna().unique().tolist()) if visao == "Todos" else [visao]
     for nome_aluno in alunos_lista:
-        grupo = df_filtrado[df_filtrado["aluno"]==nome_aluno].copy() if nome_aluno != "Todos" else df_filtrado.copy()
+        grupo_esc = df_escopo[df_escopo["aluno"]==nome_aluno].copy() if nome_aluno != "Todos" else df_escopo.copy()
+        grupo_per = df_periodo[df_periodo["aluno"]==nome_aluno].copy() if nome_aluno != "Todos" else df_periodo.copy()
+        grupo = grupo_esc  # para insights, usa escopo completo
         grupo["data_ref"] = pd.to_datetime(grupo.get("data_execucao", pd.Series(dtype=str)), errors="coerce")
-        kpis_al = calcular_kpis_avancados(grupo)
+        kpis_al = calcular_kpis_avancados(grupo_esc, grupo_per)
         insights = gerar_insights(grupo, kpis_al, nome_aluno)
         with st.expander(f"🧠 {nome_aluno}", expanded=(len(alunos_lista)==1)):
             c1,c2,c3,c4 = st.columns(4)
@@ -2870,25 +2910,22 @@ def dashboard():
         st.info("Cadastre alunos, tarefas e registros para iniciar o acompanhamento.")
         return
 
-    df_filtrado, visao, inicio_periodo, fim_periodo = painel_filtros(df, "dash")
-    if df_filtrado.empty:
+    df_escopo, df_periodo, visao, inicio_periodo, fim_periodo = painel_filtros(df, "dash")
+    if df_escopo.empty:
         st.info("Nenhum registro encontrado com os filtros selecionados.")
         return
 
-    df_filtrado = df_filtrado.copy()
-    df_filtrado["data_ref"] = pd.to_datetime(
-        df_filtrado.get("data_execucao", pd.Series(dtype=str)), errors="coerce"
-    )
-    kpis       = calcular_kpis_avancados(df_filtrado, inicio_periodo, fim_periodo)
+    kpis       = calcular_kpis_avancados(df_escopo, df_periodo, inicio_periodo, fim_periodo)
     analisavel = kpis["analisavel"]
 
     st.caption(
         "📌 Passe o mouse sobre ? para ver fórmula e interpretação. "
-        "Âmbar = últimos 15 dias · Verde = histórico completo."
+        "Âmbar = últimos 15 dias · Verde = escopo completo do filtro. "
+        "Contagens estruturais (total, restantes, progresso) ignoram filtro de período."
     )
 
-    # ── Bloco 15 dias ──
-    _resumo_15dias(df_filtrado)
+    # ── Bloco 15 dias (sempre sobre df_escopo para ter a janela recente correta) ──
+    _resumo_15dias(df_escopo)
 
     st.markdown("---")
 
@@ -2924,13 +2961,14 @@ def dashboard():
         _titulo_secao("Distribuição por status",
             "Quantas tarefas estão em cada status (Não iniciada, Em andamento, Concluída). "
             "Permite visualizar a fila de trabalho e o progresso geral.")
-        _aba_visao_geral(df_filtrado, analisavel)
+        _aba_visao_geral(df_escopo, analisavel)
 
     with abas[1]:
         _titulo_secao("Análise por disciplina",
-            "Progresso e desempenho separados por disciplina. "
-            "O progresso considera TODAS as tarefas da disciplina (concluídas + em andamento + não iniciadas).")
-        _aba_disciplinas(analisavel, df_total=df_filtrado)
+            "Progresso usa o escopo total (sem filtro de período). "
+            "Horas e desempenho respeitam o período selecionado. "
+            "O denominador do progresso inclui TODAS as tarefas da disciplina no escopo.")
+        _aba_disciplinas(analisavel, df_total=df_escopo)
 
     with abas[2]:
         _titulo_secao("Evolução temporal",
@@ -2953,13 +2991,13 @@ def dashboard():
     with abas[5]:
         _titulo_secao("Análise inteligente por aluno",
             "Insights automáticos gerados com base no histórico individual: padrões, riscos, disciplinas frágeis e recomendações.")
-        _aba_analise_ia(df_filtrado, visao, kpis)
+        _aba_analise_ia(df_escopo, df_periodo, visao, kpis)
 
     with abas[6]:
         _titulo_secao("Todas as atividades",
             "Tabela detalhada com todos os registros de execução do período filtrado. "
             "Útil para auditoria e acompanhamento granular.")
-        tabela  = preparar_tabela(df_filtrado)
+        tabela  = preparar_tabela(df_escopo)
         colunas = ["aluno","tarefa","disciplina","aula","assunto","tipo","status_label",
                    "data_execucao","tempo","qtd_questoes_feitas","qtd_acertos","desempenho","comentario"]
         st.dataframe(
