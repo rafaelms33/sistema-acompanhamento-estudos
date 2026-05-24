@@ -3190,46 +3190,51 @@ def _render_banner_sucesso() -> None:
 # REGISTRO RÁPIDO — estado e helpers
 # ─────────────────────────────────────────────────────────────────
 
-# Keys do session_state por status (absolutamente independentes)
-_RR_KEY = {
-    STATUS_NAO_INICIADA: "rr_tid_nao",
-    STATUS_EM_ANDAMENTO: "rr_tid_and",
-    STATUS_CONCLUIDA:    "rr_tid_con",
+# Keys de ARMAZENAMENTO no session_state (não usadas como key de widget)
+_RR_STORE = {
+    STATUS_NAO_INICIADA: "rr_store_nao",
+    STATUS_EM_ANDAMENTO: "rr_store_and",
+    STATUS_CONCLUIDA:    "rr_store_con",
 }
-_RR_ABA_KEY = "rr_aba_ativa"   # guarda qual aba está ativa
+# Keys de WIDGET do selectbox (diferentes das de armazenamento)
+_RR_KEY = {
+    STATUS_NAO_INICIADA: "rr_wgt_nao",
+    STATUS_EM_ANDAMENTO: "rr_wgt_and",
+    STATUS_CONCLUIDA:    "rr_wgt_con",
+}
+_RR_ABA_KEY = "rr_aba_ativa"
 
 
 def _rr_init(aluno_id: int) -> None:
     """Inicializa as chaves de session_state do Registro Rápido."""
     if st.session_state.get("rr_aluno_anterior") != aluno_id:
-        # Aluno trocado: limpa seleções anteriores
-        for k in _RR_KEY.values():
+        for k in list(_RR_STORE.values()) + list(_RR_KEY.values()):
             st.session_state.pop(k, None)
         st.session_state["rr_aluno_anterior"] = aluno_id
 
 
 def _rr_get_tarefa_id(status: str) -> int | None:
-    """Retorna o tarefa_id salvo para o status, ou None."""
-    return st.session_state.get(_RR_KEY[status])
+    """Retorna o tarefa_id salvo para o status (lê da chave de armazenamento)."""
+    return st.session_state.get(_RR_STORE[status])
 
 
 def _rr_set_tarefa_id(status: str, tarefa_id: int | None) -> None:
-    """Salva o tarefa_id para o status."""
+    """Salva o tarefa_id na chave de ARMAZENAMENTO (nunca na key do widget)."""
+    store_key = _RR_STORE[status]
     if tarefa_id is None:
-        st.session_state.pop(_RR_KEY[status], None)
+        st.session_state.pop(store_key, None)
     else:
-        st.session_state[_RR_KEY[status]] = int(tarefa_id)
+        st.session_state[store_key] = int(tarefa_id)
 
 
 def _rr_limpar_outros(status_ativo: str) -> None:
-    """Limpa seleções das outras duas abas para evitar interferência."""
-    for s, k in _RR_KEY.items():
+    """Limpa seleções das outras duas abas."""
+    for s in _RR_STORE:
         if s != status_ativo:
-            st.session_state.pop(k, None)
+            st.session_state.pop(_RR_STORE[s], None)
 
 
 def _rr_aba_ativa() -> str:
-    """Retorna a aba ativa salva, ou STATUS_NAO_INICIADA como padrão."""
     return st.session_state.get(_RR_ABA_KEY, STATUS_NAO_INICIADA)
 
 
@@ -3239,37 +3244,37 @@ def _rr_set_aba(status: str) -> None:
 
 def _rr_selectbox(grupo: pd.DataFrame, status: str, label: str) -> pd.Series | None:
     """
-    Renderiza o selectbox para o grupo de tarefas do status.
+    Selectbox com persistência de seleção via session_state.
 
-    Usa uma key exclusiva por status (nunca compartilhada).
-    Recupera o ID salvo em session_state para restaurar a seleção após rerun.
-    Qualquer mudança no selectbox é salva imediatamente.
-    Retorna a linha do DataFrame da tarefa selecionada, ou None se vazio.
+    Separação obrigatória:
+    - _RR_STORE[status] → chave de ARMAZENAMENTO (lida/escrita pelo nosso código)
+    - _RR_KEY[status]   → key do WIDGET (gerenciada exclusivamente pelo Streamlit)
+
+    Nunca escrevemos em session_state[widget_key] após o widget ser instanciado.
     """
     if grupo.empty:
         return None
 
-    ids     = grupo["tarefa_id"].tolist()
+    ids      = grupo["tarefa_id"].tolist()
     id_salvo = _rr_get_tarefa_id(status)
 
-    # Calcula índice inicial: usa ID salvo se ainda está no grupo
+    # Calcula índice inicial pela chave de armazenamento
     if id_salvo in ids:
         idx = ids.index(id_salvo)
     else:
         idx = 0
-        _rr_set_tarefa_id(status, ids[0])   # salva o padrão
 
-    # Selectbox com key absolutamente única para este status
+    # Widget: key é exclusiva desta aba, gerenciada pelo Streamlit
     sel_id = st.selectbox(
         label,
         ids,
         index=idx,
         format_func=lambda v: _label_tarefa(grupo[grupo["tarefa_id"] == v].iloc[0]),
-        key=_RR_KEY[status],        # key = chave de session_state dedicada
+        key=_RR_KEY[status],
     )
-    # O Streamlit salva o valor automaticamente em session_state[key] = sel_id
-    # mas o tipo pode variar, então garantimos inteiro
-    st.session_state[_RR_KEY[status]] = int(sel_id)
+
+    # Persiste na chave de ARMAZENAMENTO (separada da key do widget)
+    _rr_set_tarefa_id(status, sel_id)
 
     matches = grupo[grupo["tarefa_id"] == sel_id]
     return None if matches.empty else matches.iloc[0]
