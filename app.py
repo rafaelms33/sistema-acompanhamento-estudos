@@ -1805,12 +1805,23 @@ def painel_filtros(df, prefixo="dash"):
         inicio, fim = inicio_padrao, fim_padrao
 
     usuario = aluno_logado()
-    alunos  = ["Todos"] + sorted(df["aluno"].dropna().unique().tolist())
+    lista_alunos = sorted(df["aluno"].dropna().unique().tolist())
     if usuario["perfil"] == "Aluno":
-        aluno = usuario["nome"]
-        st.sidebar.text_input("Aluno", value=aluno, disabled=True)
+        alunos_sel = [usuario["nome"]]
+        st.sidebar.text_input("Aluno", value=usuario["nome"], disabled=True)
     else:
-        aluno = st.sidebar.selectbox("Aluno", alunos, key=f"{prefixo}_aluno")
+        alunos_sel = st.sidebar.multiselect(
+            "Alunos", lista_alunos, default=[],
+            placeholder="Todos os alunos",
+            key=f"{prefixo}_aluno",
+        )
+    # visao: "Todos", nome único, ou lista de nomes para modo comparativo
+    if not alunos_sel:
+        visao = "Todos"
+    elif len(alunos_sel) == 1:
+        visao = alunos_sel[0]
+    else:
+        visao = alunos_sel  # lista — ativa modo comparativo
 
     disciplinas = sorted(df["disciplina"].dropna().unique().tolist())
     assuntos    = sorted(df["assunto"].dropna().unique().tolist())
@@ -1842,13 +1853,13 @@ def painel_filtros(df, prefixo="dash"):
             _toast_sucesso("Filtro salvo como favorito.")
 
     # ── Filtros estruturais (sem período) ──
-    # Usados para: total de tarefas, progresso, restantes, em andamento.
-    # Tarefas sem data de execução (Não iniciadas) NÃO desaparecem aqui.
     escopo = df.copy()
     escopo["data_ref"] = pd.to_datetime(escopo["data_execucao"], errors="coerce")
 
-    if aluno != "Todos":
-        escopo = escopo[escopo["aluno"] == aluno]
+    if isinstance(visao, list):
+        escopo = escopo[escopo["aluno"].isin(visao)]
+    elif visao != "Todos":
+        escopo = escopo[escopo["aluno"] == visao]
     if status_escolhidos:
         escopo = escopo[escopo["status"].isin(status_escolhidos)]
     if disciplina:
@@ -1887,7 +1898,7 @@ def painel_filtros(df, prefixo="dash"):
         com_data  = periodo_df["data_ref"].notna() & (periodo_df["data_ref"] >= limite)
         periodo_df = periodo_df[sem_data | com_data]
 
-    return escopo, periodo_df, aluno, inicio, fim
+    return escopo, periodo_df, visao, inicio, fim
 
 
 def base_metricas(df):
@@ -2738,57 +2749,102 @@ def _aba_ranking(analisavel):
 def _aba_analise_ia(df_escopo, df_periodo, visao, kpis):
     analisavel = kpis["analisavel"]
     if analisavel.empty:
-        st.info("Sem atividades para análise."); return
-    alunos_lista = sorted(analisavel["aluno"].dropna().unique().tolist()) if visao == "Todos" else [visao]
+        st.info("Sem atividades para análise.")
+        return
+
+    # visao pode ser "Todos", um nome (str) ou uma lista de nomes
+    if isinstance(visao, list):
+        alunos_lista = visao
+    elif visao == "Todos":
+        alunos_lista = sorted(analisavel["aluno"].dropna().unique().tolist())
+    else:
+        alunos_lista = [visao]
+
     for nome_aluno in alunos_lista:
-        grupo_esc = df_escopo[df_escopo["aluno"]==nome_aluno].copy() if nome_aluno != "Todos" else df_escopo.copy()
-        grupo_per = df_periodo[df_periodo["aluno"]==nome_aluno].copy() if nome_aluno != "Todos" else df_periodo.copy()
-        grupo = grupo_esc  # para insights, usa escopo completo
-        grupo["data_ref"] = pd.to_datetime(grupo.get("data_execucao", pd.Series(dtype=str)), errors="coerce")
-        kpis_al = calcular_kpis_avancados(grupo_esc, grupo_per)
+        grupo_esc = df_escopo[df_escopo["aluno"] == nome_aluno].copy()
+        grupo_per = df_periodo[df_periodo["aluno"] == nome_aluno].copy()
+        grupo     = grupo_esc.copy()
+        grupo["data_ref"] = pd.to_datetime(
+            grupo.get("data_execucao", pd.Series(dtype=str)), errors="coerce"
+        )
+        kpis_al  = calcular_kpis_avancados(grupo_esc, grupo_per)
         insights = gerar_insights(grupo, kpis_al, nome_aluno)
-        with st.expander(f"🧠 {nome_aluno}", expanded=(len(alunos_lista)==1)):
-            c1,c2,c3,c4 = st.columns(4)
-            c1.metric("Horas esta semana", horas_para_hm(kpis_al["horas_semana"]), delta="+" + horas_para_hm(abs(kpis_al["delta_horas_semana"])) + " vs sem. ant." if kpis_al["delta_horas_semana"] >= 0 else "-" + horas_para_hm(abs(kpis_al["delta_horas_semana"])) + " vs sem. ant.")
+
+        with st.expander(f"🧠 {nome_aluno}", expanded=(len(alunos_lista) == 1)):
+            c1, c2, c3, c4 = st.columns(4)
+            dh = kpis_al["delta_horas_semana"]
+            delta_h = ("+" if dh >= 0 else "-") + horas_para_hm(abs(dh)) + " vs sem. ant."
+            c1.metric("Horas esta semana", horas_para_hm(kpis_al["horas_semana"]), delta=delta_h)
             c2.metric("Progresso geral", f"{kpis_al['pct_conclusao']:.1f}%")
             c3.metric("Desempenho", f"{kpis_al['desempenho']:.1f}%")
-            c4.metric("Sequência", f"{kpis_al['sequencia']} dias",
-                delta=f"{kpis_al['dias_sem_estudar']}d sem estudar" if kpis_al["dias_sem_estudar"]>0 else "Estudou hoje")
+            c4.metric(
+                "Sequência", f"{kpis_al['sequencia']} dias",
+                delta=(f"{kpis_al['dias_sem_estudar']}d sem estudar"
+                       if kpis_al["dias_sem_estudar"] > 0 else "Estudou hoje"),
+            )
             render_html('<div class="section-title">Análise automática</div>')
             for ins in insights:
-                render_html(insight_card(ins["tipo"],ins["icone"],ins["titulo"],ins["texto"]))
+                render_html(insight_card(ins["tipo"], ins["icone"], ins["titulo"], ins["texto"]))
+
             ana_al = kpis_al["analisavel"]
             if not ana_al.empty and "data_ref" in ana_al.columns:
                 evo = ana_al.dropna(subset=["data_ref"]).copy()
                 if not evo.empty:
-                    sem = evo.set_index("data_ref").resample("W").agg(horas=("ch_efetiva","sum"), concluidas=("status", lambda s:(s==STATUS_CONCLUIDA).sum())).reset_index()
+                    sem = (
+                        evo.set_index("data_ref")
+                        .resample("W")
+                        .agg(horas=("ch_efetiva", "sum"),
+                             concluidas=("status", lambda s: (s == STATUS_CONCLUIDA).sum()))
+                        .reset_index()
+                    )
                     sem["label"] = sem["data_ref"].dt.strftime("Sem %d/%m")
                     if len(sem) > 1:
                         fig = go.Figure()
-                        fig.add_trace(go.Bar(x=sem["label"], y=sem["horas"], name="Horas", marker_color="#3b82f6"))
-                        fig.add_trace(go.Scatter(x=sem["label"], y=sem["concluidas"], name="Concluídas", mode="lines+markers", yaxis="y2", marker_color="#22c55e", line=dict(width=2)))
-                        fig.update_layout(title=f"Evolução semanal — {nome_aluno}", yaxis2=dict(overlaying="y", side="right"))
+                        fig.add_trace(go.Bar(x=sem["label"], y=sem["horas"],
+                            name="Horas", marker_color="#3b82f6"))
+                        fig.add_trace(go.Scatter(x=sem["label"], y=sem["concluidas"],
+                            name="Concluídas", mode="lines+markers",
+                            yaxis="y2", marker_color="#22c55e", line=dict(width=2)))
+                        fig.update_layout(
+                            title=f"Evolução semanal — {nome_aluno}",
+                            yaxis2=dict(overlaying="y", side="right"),
+                        )
                         st.plotly_chart(fig_layout(fig, 240), use_container_width=True)
+
             if not ana_al.empty and "disciplina" in ana_al.columns:
                 da = ana_al.groupby("disciplina", as_index=False).agg(
-                    questoes=("qtd_questoes_feitas","sum"), acertos=("qtd_acertos","sum"),
-                    tarefas=("tarefa_id","count"), concluidas=("status", lambda s:(s==STATUS_CONCLUIDA).sum()),
+                    questoes=("qtd_questoes_feitas", "sum"),
+                    acertos=("qtd_acertos", "sum"),
+                    tarefas=("tarefa_id", "count"),
+                    concluidas=("status", lambda s: (s == STATUS_CONCLUIDA).sum()),
                 )
-                da["desempenho"] = da.apply(lambda r: r["acertos"]/r["questoes"]*100 if r["questoes"] else 0, axis=1)
-                da["progresso"]  = da.apply(lambda r: r["concluidas"]/r["tarefas"]*100 if r["tarefas"] else 0, axis=1)
-                frageis  = da[(da["questoes"]>0) & (da["desempenho"]<70)].sort_values("desempenho")
-                criticas = da[da["progresso"]<30].sort_values("progresso")
+                da["desempenho"] = da.apply(
+                    lambda r: r["acertos"] / r["questoes"] * 100 if r["questoes"] else 0, axis=1)
+                da["progresso"]  = da.apply(
+                    lambda r: r["concluidas"] / r["tarefas"] * 100 if r["tarefas"] else 0, axis=1)
+                frageis  = da[(da["questoes"] > 0) & (da["desempenho"] < 70)].sort_values("desempenho")
+                criticas = da[da["progresso"] < 30].sort_values("progresso")
                 if not frageis.empty or not criticas.empty:
                     render_html('<div class="section-title">Disciplinas que precisam de atenção</div>')
                     fc1, fc2 = st.columns(2)
                     with fc1:
                         if not frageis.empty:
                             st.caption("🔴 Baixo desempenho em questões (<70%)")
-                            st.dataframe(frageis[["disciplina","desempenho","questoes","acertos"]].rename(columns={"disciplina":"Disciplina","desempenho":"Desempenho (%)","questoes":"Questões","acertos":"Acertos"}), hide_index=True, use_container_width=True)
+                            st.dataframe(
+                                frageis[["disciplina", "desempenho", "questoes", "acertos"]].rename(
+                                    columns={"disciplina": "Disciplina", "desempenho": "Desempenho (%)",
+                                             "questoes": "Questões", "acertos": "Acertos"}),
+                                hide_index=True, use_container_width=True,
+                            )
                     with fc2:
                         if not criticas.empty:
                             st.caption("⚠️ Baixo progresso (<30% concluído)")
-                            st.dataframe(criticas[["disciplina","progresso","tarefas","concluidas"]].rename(columns={"disciplina":"Disciplina","progresso":"Progresso (%)","tarefas":"Tarefas","concluidas":"Concluídas"}), hide_index=True, use_container_width=True)
+                            st.dataframe(
+                                criticas[["disciplina", "progresso", "tarefas", "concluidas"]].rename(
+                                    columns={"disciplina": "Disciplina", "progresso": "Progresso (%)",
+                                             "tarefas": "Tarefas", "concluidas": "Concluídas"}),
+                                hide_index=True, use_container_width=True,
+                            )
 
 
 # ─────────────────────────────────────────────
@@ -2808,12 +2864,14 @@ def _tooltip_grafico(texto: str) -> str:
 def _titulo_secao(label: str, tooltip: str = "", periodo: str = "") -> None:
     badge = ""
     if periodo:
-        if "15" in periodo:
-            cor, borda, txt = "#fef3c7", "#fde68a", "#92400e"   # âmbar — 15 dias
+        if "Comparativo" in periodo:
+            cor, borda, txt = "#f5f3ff", "#ddd6fe", "#5b21b6"  # roxo — comparativo
+        elif "15" in periodo:
+            cor, borda, txt = "#fef3c7", "#fde68a", "#92400e"   # âmbar
         elif "7" in periodo:
-            cor, borda, txt = "#eff6ff", "#bfdbfe", "#1d4ed8"   # azul  — 7 dias
+            cor, borda, txt = "#eff6ff", "#bfdbfe", "#1d4ed8"   # azul
         else:
-            cor, borda, txt = "#f0fdf4", "#bbf7d0", "#166534"   # verde — histórico
+            cor, borda, txt = "#f0fdf4", "#bbf7d0", "#166534"   # verde
         badge = (
             f'<span style="background:{cor};color:{txt};border:1px solid {borda};'
             f'border-radius:999px;padding:2px 10px;font-size:.67rem;font-weight:800;'
@@ -2900,6 +2958,357 @@ def _resumo_15dias(df_total: pd.DataFrame) -> None:
             render_html(card)
 
 
+def _card_comparativo(label: str, valor: str, subtexto: str = "", tooltip: str = "") -> str:
+    """Card simples para uso na grade comparativa."""
+    tip = ""
+    if tooltip:
+        tip = (
+            '<div class="kpi-ttip-wrap" style="position:absolute;top:6px;right:6px">'
+            '<div class="kpi-ttip-icon">?</div>'
+            f'<div class="kpi-ttip-box">{escape_html(tooltip)}</div>'
+            '</div>'
+        )
+    return (
+        f'<div class="kpi-card" style="min-height:80px">{tip}'
+        f'<div class="kpi-label">{escape_html(label)}</div>'
+        f'<div class="kpi-value" style="font-size:1.2rem">{escape_html(valor)}</div>'
+        f'<div class="kpi-sub">{escape_html(subtexto)}</div>'
+        f'</div>'
+    )
+
+
+def _dashboard_comparativo(
+    df_escopo: pd.DataFrame,
+    df_periodo: pd.DataFrame,
+    alunos_sel: list,
+    inicio_periodo,
+    fim_periodo,
+):
+    """
+    Modo comparativo: KPIs e gráficos separados por aluno, sem somar dados.
+    Ativado quando mais de um aluno é selecionado no filtro.
+    """
+    import plotly.graph_objects as go
+
+    CORES_ALUNOS = [
+        "#3b82f6","#22c55e","#f59e0b","#ef4444",
+        "#8b5cf6","#06b6d4","#ec4899","#84cc16",
+    ]
+
+    render_html(
+        '<div class="insight-card info" style="margin-bottom:16px">'
+        '<div class="insight-icon">👥</div>'
+        '<div class="insight-body">'
+        '<div class="insight-title">Modo comparativo ativo</div>'
+        '<p class="insight-text">'
+        f'Comparando <strong>{len(alunos_sel)} alunos</strong>. '
+        'Os valores são exibidos separadamente — os dados <strong>não são somados</strong>. '
+        'Filtros de disciplina e período continuam sendo aplicados individualmente por aluno.'
+        '</p></div></div>'
+    )
+
+    # ── KPIs individuais por aluno ──
+    dados_alunos = []
+    for nome in alunos_sel:
+        esc_al = df_escopo[df_escopo["aluno"] == nome].copy()
+        per_al = df_periodo[df_periodo["aluno"] == nome].copy()
+        if esc_al.empty and per_al.empty:
+            continue
+        k = calcular_kpis_avancados(esc_al, per_al, inicio_periodo, fim_periodo)
+        dados_alunos.append({"nome": nome, "kpis": k, "esc": esc_al, "per": per_al})
+
+    if not dados_alunos:
+        st.info("Sem dados para os alunos selecionados com os filtros aplicados.")
+        return
+
+    # ── Grade de cards por aluno ──
+    _titulo_secao(
+        "KPIs por aluno",
+        "Cada coluna é um aluno — valores calculados individualmente, sem somar. "
+        "Contagens estruturais (progresso, restantes) ignoram filtro de período. "
+        "Horas e desempenho respeitam o período selecionado.",
+        "Comparativo",
+    )
+
+    cols = st.columns(min(len(dados_alunos), 4))
+    for i, d in enumerate(dados_alunos):
+        k    = d["kpis"]
+        nome = d["nome"]
+        prev = k["previsao_conclusao"]
+        cor  = CORES_ALUNOS[i % len(CORES_ALUNOS)]
+
+        with cols[i % len(cols)]:
+            # Cabeçalho do aluno
+            render_html(
+                f'<div style="background:{cor};color:#fff;border-radius:10px 10px 0 0;'
+                f'padding:10px 14px;font-weight:800;font-size:.88rem;text-align:center;'
+                f'margin-bottom:0">'
+                f'{escape_html(nome)}</div>'
+            )
+            kpis_itens = [
+                ("Total de horas",       horas_para_hm(k["horas_total"]),
+                 "no período",
+                 "Soma de ch_efetiva das execuções com data no período. Não inclui tarefas sem data."),
+                ("Progresso",            f"{k['pct_conclusao']:.1f}%",
+                 f"{k['qtd_concluidas']} / {k['total_tarefas']} tarefas",
+                 "Concluídas ÷ total de tarefas do escopo (sem filtro de período)."),
+                ("Em andamento",         str(k["qtd_andamento"]),
+                 f"{k['qtd_nao_iniciada']} não iniciadas",
+                 "Tarefas com status Em andamento. Não inclui filtro de período."),
+                ("Restantes",            str(k["tarefas_restantes"]),
+                 "andamento + não iniciadas",
+                 "Total de tarefas ainda não concluídas no escopo do aluno."),
+                ("Média diária (úteis)", horas_para_hm(k["media_diaria"]),
+                 k["media_diaria_label"],
+                 "Horas do período ÷ dias úteis (seg–sex) do período selecionado."),
+                ("Desempenho",           f"{k['desempenho']:.1f}%",
+                 f"{k['acertos']} acertos / {k['questoes']} questões",
+                 "Taxa de acerto nas questões do período selecionado."),
+                ("Produtividade",        f"{k['produtividade']:.2f}",
+                 "tarefas concluídas / hora",
+                 "Tarefas concluídas (escopo) ÷ horas estudadas (período)."),
+                ("Previsão de conclusão",
+                 prev.strftime("%d/%m/%Y") if prev else "Dados insuficientes",
+                 k["previsao_base"][:55] + ("…" if len(k["previsao_base"]) > 55 else ""),
+                 k["previsao_base"]),
+            ]
+            for lbl, val, sub, tip in kpis_itens:
+                render_html(_card_comparativo(lbl, val, sub, tip))
+
+    st.markdown("---")
+
+    # ── Gráficos ──
+    abas = st.tabs([
+        "📊 Horas & Progresso",
+        "📚 Disciplinas",
+        "📅 Evolução",
+        "🎯 Desempenho",
+        "📋 Atividades",
+    ])
+
+    df_resumo = pd.DataFrame([
+        {
+            "Aluno":             d["nome"],
+            "Horas":             round(d["kpis"]["horas_total"], 2),
+            "Concluídas":        d["kpis"]["qtd_concluidas"],
+            "Progresso (%)":     round(d["kpis"]["pct_conclusao"], 1),
+            "Em andamento":      d["kpis"]["qtd_andamento"],
+            "Restantes":         d["kpis"]["tarefas_restantes"],
+            "Desempenho (%)":    round(d["kpis"]["desempenho"], 1),
+            "Questões":          d["kpis"]["questoes"],
+            "Acertos":           d["kpis"]["acertos"],
+            "Produtividade (t/h)": round(d["kpis"]["produtividade"], 2),
+        }
+        for d in dados_alunos
+    ])
+
+    with abas[0]:
+        render_html(_tooltip_grafico(
+            "Barras comparando horas e tarefas por aluno. "
+            "Horas = período selecionado. Concluídas = escopo total. "
+            "Valores não somados — cada barra representa um aluno."
+        ))
+        col_a, col_b = st.columns(2)
+        with col_a:
+            fig = go.Figure()
+            for i, d in enumerate(dados_alunos):
+                fig.add_trace(go.Bar(
+                    name=d["nome"], x=[d["nome"]], y=[d["kpis"]["horas_total"]],
+                    marker_color=CORES_ALUNOS[i % len(CORES_ALUNOS)],
+                    text=[horas_para_hm(d["kpis"]["horas_total"])],
+                    textposition="outside",
+                ))
+            fig.update_layout(title="Total de horas por aluno", showlegend=False)
+            st.plotly_chart(fig_layout(fig, 300), use_container_width=True)
+
+        with col_b:
+            fig = go.Figure()
+            for i, d in enumerate(dados_alunos):
+                fig.add_trace(go.Bar(
+                    name=d["nome"], x=[d["nome"]],
+                    y=[d["kpis"]["qtd_concluidas"]],
+                    marker_color=CORES_ALUNOS[i % len(CORES_ALUNOS)],
+                    text=[str(d["kpis"]["qtd_concluidas"])], textposition="outside",
+                ))
+            fig.update_layout(title="Tarefas concluídas por aluno", showlegend=False)
+            st.plotly_chart(fig_layout(fig, 300), use_container_width=True)
+
+        # Progresso em barras horizontais com label do aluno
+        render_html(_tooltip_grafico(
+            "Progresso geral de cada aluno: tarefas concluídas ÷ total de tarefas do escopo. "
+            "Não é afetado pelo filtro de período."
+        ))
+        fig = go.Figure()
+        for i, d in enumerate(dados_alunos):
+            pct = d["kpis"]["pct_conclusao"]
+            fig.add_trace(go.Bar(
+                name=d["nome"], y=[d["nome"]], x=[pct],
+                orientation="h",
+                marker_color=("#22c55e" if pct>=80 else "#f59e0b" if pct>=40 else "#ef4444"),
+                text=[f"{pct:.1f}%"], textposition="outside",
+            ))
+        fig.update_layout(title="Progresso geral por aluno (%)", showlegend=False,
+            xaxis_range=[0, 120])
+        st.plotly_chart(fig_layout(fig, max(220, len(dados_alunos)*50)), use_container_width=True)
+        st.dataframe(df_resumo[["Aluno","Horas","Concluídas","Progresso (%)","Em andamento","Restantes"]],
+            use_container_width=True, hide_index=True)
+
+    with abas[1]:
+        render_html(_tooltip_grafico(
+            "Progresso por disciplina separado por aluno. "
+            "Denominador = todas as tarefas da disciplina no escopo do aluno (sem filtro de período). "
+            "Barras agrupadas: cada cor é um aluno."
+        ))
+        disc_rows = []
+        for i, d in enumerate(dados_alunos):
+            esc_a   = d["esc"]
+            per_a   = d["per"]
+            per_an  = per_a[per_a["status"].isin(STATUS_ANALISE)]
+            dp = esc_a.groupby("disciplina", as_index=False).agg(
+                total=("tarefa_id","count"),
+                concluidas=("status", lambda s:(s==STATUS_CONCLUIDA).sum()),
+            )
+            dperf = per_an.groupby("disciplina", as_index=False).agg(
+                horas=("ch_efetiva","sum"),
+                questoes=("qtd_questoes_feitas","sum"),
+                acertos=("qtd_acertos","sum"),
+            )
+            dm = dp.merge(dperf, on="disciplina", how="left").fillna(0)
+            dm["progresso"]  = dm.apply(lambda r: r["concluidas"]/r["total"]*100 if r["total"] else 0, axis=1)
+            dm["desempenho"] = dm.apply(lambda r: r["acertos"]/r["questoes"]*100 if r["questoes"] else 0, axis=1)
+            dm["Aluno"]      = d["nome"]
+            disc_rows.append(dm)
+
+        if disc_rows:
+            df_disc = pd.concat(disc_rows, ignore_index=True)
+            disciplinas_u = sorted(df_disc["disciplina"].unique().tolist())
+
+            fig = go.Figure()
+            for i, d in enumerate(dados_alunos):
+                sub = df_disc[df_disc["Aluno"] == d["nome"]]
+                fig.add_trace(go.Bar(
+                    name=d["nome"], x=sub["disciplina"], y=sub["progresso"],
+                    marker_color=CORES_ALUNOS[i % len(CORES_ALUNOS)],
+                    text=sub["progresso"].map(lambda v: f"{v:.0f}%"),
+                    textposition="outside",
+                ))
+            fig.update_layout(
+                title="Progresso por disciplina — por aluno (%)",
+                barmode="group", yaxis_range=[0, 125],
+            )
+            st.plotly_chart(fig_layout(fig, max(300, len(disciplinas_u)*60)), use_container_width=True)
+
+            # Desempenho por disciplina
+            fig2 = go.Figure()
+            for i, d in enumerate(dados_alunos):
+                sub = df_disc[df_disc["Aluno"] == d["nome"]]
+                fig2.add_trace(go.Bar(
+                    name=d["nome"], x=sub["disciplina"], y=sub["desempenho"],
+                    marker_color=CORES_ALUNOS[i % len(CORES_ALUNOS)],
+                    text=sub["desempenho"].map(lambda v: f"{v:.0f}%"),
+                    textposition="outside",
+                ))
+            fig2.update_layout(title="Desempenho por disciplina — por aluno (%)",
+                barmode="group", yaxis_range=[0, 125])
+            st.plotly_chart(fig_layout(fig2, max(300, len(disciplinas_u)*60)), use_container_width=True)
+
+            st.dataframe(
+                df_disc[["Aluno","disciplina","progresso","desempenho","horas","concluidas","total"]].rename(
+                    columns={"disciplina":"Disciplina","progresso":"Progresso (%)","desempenho":"Desempenho (%)",
+                             "horas":"Horas","concluidas":"Concluídas","total":"Total tarefas"}),
+                use_container_width=True, hide_index=True,
+            )
+
+    with abas[2]:
+        render_html(_tooltip_grafico(
+            "Evolução diária e semanal de horas por aluno. "
+            "Cada linha/barra representa um aluno separadamente."
+        ))
+        per_anal_todos = df_periodo[df_periodo["status"].isin(STATUS_ANALISE)].copy()
+        if "data_ref" not in per_anal_todos.columns:
+            per_anal_todos["data_ref"] = pd.to_datetime(
+                per_anal_todos.get("data_execucao", pd.Series(dtype=str)), errors="coerce")
+        per_anal_todos = per_anal_todos[per_anal_todos["aluno"].isin(alunos_sel)]
+
+        evo = per_anal_todos.dropna(subset=["data_ref"]).copy()
+        if not evo.empty:
+            evo["dia"] = evo["data_ref"].dt.date
+            diario = evo.groupby(["dia","aluno"], as_index=False).agg(horas=("ch_efetiva","sum"))
+            fig = go.Figure()
+            for i, d in enumerate(dados_alunos):
+                sub = diario[diario["aluno"] == d["nome"]].sort_values("dia")
+                if not sub.empty:
+                    fig.add_trace(go.Scatter(
+                        x=sub["dia"], y=sub["horas"], mode="lines+markers",
+                        name=d["nome"], line=dict(color=CORES_ALUNOS[i%len(CORES_ALUNOS)], width=2),
+                    ))
+            fig.update_layout(title="Evolução diária de horas por aluno")
+            st.plotly_chart(fig_layout(fig, 320), use_container_width=True)
+
+            semanal = (evo.groupby(["aluno","data_ref"])
+                .agg(horas=("ch_efetiva","sum"))
+                .reset_index())
+            semanal = semanal.set_index("data_ref").groupby("aluno").resample("W")["horas"].sum().reset_index()
+            semanal["semana"] = semanal["data_ref"].dt.strftime("Sem %d/%m")
+            fig2 = go.Figure()
+            for i, d in enumerate(dados_alunos):
+                sub = semanal[semanal["aluno"] == d["nome"]]
+                if not sub.empty:
+                    fig2.add_trace(go.Bar(
+                        name=d["nome"], x=sub["semana"], y=sub["horas"],
+                        marker_color=CORES_ALUNOS[i%len(CORES_ALUNOS)],
+                    ))
+            fig2.update_layout(title="Horas semanais por aluno", barmode="group")
+            st.plotly_chart(fig_layout(fig2, 300), use_container_width=True)
+        else:
+            st.info("Sem dados de evolução para o período selecionado.")
+
+    with abas[3]:
+        render_html(_tooltip_grafico(
+            "Desempenho, questões e produtividade por aluno. "
+            "Calculado sobre execuções com data no período selecionado."
+        ))
+        col_a, col_b = st.columns(2)
+        with col_a:
+            fig = go.Figure()
+            for i, d in enumerate(dados_alunos):
+                v = d["kpis"]["desempenho"]
+                fig.add_trace(go.Bar(
+                    name=d["nome"], x=[d["nome"]], y=[v],
+                    marker_color=("#22c55e" if v>=70 else "#f59e0b" if v>=50 else "#ef4444"),
+                    text=[f"{v:.1f}%"], textposition="outside",
+                ))
+            fig.update_layout(title="Desempenho por aluno (%)", showlegend=False,
+                yaxis_range=[0,115])
+            st.plotly_chart(fig_layout(fig, 300), use_container_width=True)
+
+        with col_b:
+            fig = go.Figure()
+            for i, d in enumerate(dados_alunos):
+                fig.add_trace(go.Bar(
+                    name=d["nome"]+" — Questões", x=[d["nome"]],
+                    y=[d["kpis"]["questoes"]], marker_color=CORES_ALUNOS[i%len(CORES_ALUNOS)],
+                ))
+                fig.add_trace(go.Bar(
+                    name=d["nome"]+" — Acertos", x=[d["nome"]],
+                    y=[d["kpis"]["acertos"]],
+                    marker_color=CORES_ALUNOS[i%len(CORES_ALUNOS)], opacity=0.5,
+                ))
+            fig.update_layout(title="Questões vs. Acertos por aluno", barmode="group")
+            st.plotly_chart(fig_layout(fig, 300), use_container_width=True)
+
+        st.dataframe(
+            df_resumo[["Aluno","Desempenho (%)","Questões","Acertos","Produtividade (t/h)"]],
+            use_container_width=True, hide_index=True,
+        )
+
+    with abas[4]:
+        tabela = preparar_tabela(df_escopo[df_escopo["aluno"].isin(alunos_sel)])
+        colunas = ["aluno","tarefa","disciplina","aula","assunto","tipo","status_label",
+                   "data_execucao","tempo","qtd_questoes_feitas","qtd_acertos","desempenho","comentario"]
+        st.dataframe(tabela[[c for c in colunas if c in tabela.columns]],
+            use_container_width=True, hide_index=True, row_height=72)
+
 def dashboard():
     render_html(f"""
         <div class="hero">
@@ -2917,26 +3326,30 @@ def dashboard():
         st.info("Nenhum registro encontrado com os filtros selecionados.")
         return
 
+    # ── Detecta modo: individual vs. comparativo ──
+    modo_comparativo = isinstance(visao, list) and len(visao) > 1
+
+    if modo_comparativo:
+        _dashboard_comparativo(df_escopo, df_periodo, visao, inicio_periodo, fim_periodo)
+        return
+
+    # ── Modo individual ──
     kpis       = calcular_kpis_avancados(df_escopo, df_periodo, inicio_periodo, fim_periodo)
     analisavel = kpis["analisavel"]
 
     st.caption(
         "📌 Passe o mouse sobre ? para ver fórmula e interpretação. "
         "Âmbar = últimos 15 dias · Verde = escopo completo do filtro. "
-        "Contagens estruturais (total, restantes, progresso) ignoram filtro de período."
+        "Contagens estruturais (total, restantes, progresso) ignoram filtro de período. "
+        "Para comparar alunos, selecione mais de um no filtro Alunos."
     )
 
-    # ── Bloco 15 dias (sempre sobre df_escopo para ter a janela recente correta) ──
     _resumo_15dias(df_escopo)
-
     st.markdown("---")
 
-    # ── Bloco histórico ──
-    _titulo_secao(
-        "Histórico completo",
+    _titulo_secao("Histórico completo",
         "Indicadores calculados sobre todo o período disponível nos filtros selecionados.",
-        "Histórico completo",
-    )
+        "Histórico completo")
     _render_kpis_produtividade(kpis)
 
     _titulo_secao("Avanço no plano",
@@ -2950,62 +3363,49 @@ def dashboard():
     st.markdown("---")
 
     abas = st.tabs([
-        "📊 Visão geral",
-        "📚 Disciplinas",
-        "📅 Evolução",
-        "⏱️ Gestão do tempo",
-        "🏆 Rankings",
-        "🧠 Análise IA",
-        "📋 Atividades",
+        "📊 Visão geral", "📚 Disciplinas", "📅 Evolução",
+        "⏱️ Gestão do tempo", "🏆 Rankings", "🧠 Análise IA", "📋 Atividades",
     ])
 
     with abas[0]:
         _titulo_secao("Distribuição por status",
-            "Quantas tarefas estão em cada status (Não iniciada, Em andamento, Concluída). "
-            "Permite visualizar a fila de trabalho e o progresso geral.")
+            "Quantas tarefas estão em cada status. Permite visualizar a fila de trabalho e o progresso geral.")
         _aba_visao_geral(df_escopo, analisavel)
 
     with abas[1]:
         _titulo_secao("Análise por disciplina",
             "Progresso usa o escopo total (sem filtro de período). "
-            "Horas e desempenho respeitam o período selecionado. "
-            "O denominador do progresso inclui TODAS as tarefas da disciplina no escopo.")
+            "Horas e desempenho respeitam o período selecionado.")
         _aba_disciplinas(analisavel, df_total=df_escopo)
 
     with abas[2]:
         _titulo_secao("Evolução temporal",
-            "Gráficos de horas e conclusões ao longo do tempo. "
-            "Mostra tendência de crescimento, constância e variações no ritmo de estudo.")
+            "Gráficos de horas e conclusões ao longo do tempo.")
         _aba_evolucao(analisavel)
 
     with abas[3]:
         _titulo_secao("Gestão do tempo",
-            "Como as horas de estudo estão distribuídas entre tipos de atividade e disciplinas. "
-            "Ajuda a identificar desequilíbrios e priorizar melhor o tempo disponível.")
+            "Como as horas de estudo estão distribuídas entre tipos de atividade e disciplinas.")
         _aba_gestao_tempo(analisavel)
 
     with abas[4]:
         _titulo_secao("Rankings comparativos",
-            "Classificação dos alunos por produtividade, consistência e desempenho. "
-            "Cada ranking usa uma métrica diferente para uma visão multidimensional.")
+            "Classificação dos alunos por produtividade, consistência e desempenho.")
         _aba_ranking(analisavel)
 
     with abas[5]:
         _titulo_secao("Análise inteligente por aluno",
-            "Insights automáticos gerados com base no histórico individual: padrões, riscos, disciplinas frágeis e recomendações.")
+            "Insights automáticos: padrões, riscos, disciplinas frágeis e recomendações.")
         _aba_analise_ia(df_escopo, df_periodo, visao, kpis)
 
     with abas[6]:
         _titulo_secao("Todas as atividades",
-            "Tabela detalhada com todos os registros de execução do período filtrado. "
-            "Útil para auditoria e acompanhamento granular.")
+            "Tabela detalhada com todos os registros de execução do período filtrado.")
         tabela  = preparar_tabela(df_escopo)
         colunas = ["aluno","tarefa","disciplina","aula","assunto","tipo","status_label",
                    "data_execucao","tempo","qtd_questoes_feitas","qtd_acertos","desempenho","comentario"]
-        st.dataframe(
-            tabela[[c for c in colunas if c in tabela.columns]],
-            use_container_width=True, hide_index=True, row_height=72,
-        )
+        st.dataframe(tabela[[c for c in colunas if c in tabela.columns]],
+            use_container_width=True, hide_index=True, row_height=72)
 
 
 # ─────────────────────────────────────────────
