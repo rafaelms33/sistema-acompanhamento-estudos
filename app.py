@@ -1815,13 +1815,15 @@ def painel_filtros(df, prefixo="dash"):
             placeholder="Todos os alunos",
             key=f"{prefixo}_aluno",
         )
-    # visao: "Todos", nome único, ou lista de nomes para modo comparativo
+    # visao: nome único (str) = individual | lista de nomes = comparativo
     if not alunos_sel:
-        visao = "Todos"
+        # "Todos" → comparativo com todos os alunos disponíveis no df
+        todos_disponiveis = sorted(df["aluno"].dropna().unique().tolist())
+        visao = todos_disponiveis if todos_disponiveis else "Todos"
     elif len(alunos_sel) == 1:
-        visao = alunos_sel[0]
+        visao = alunos_sel[0]   # individual
     else:
-        visao = alunos_sel  # lista — ativa modo comparativo
+        visao = alunos_sel      # comparativo explícito
 
     disciplinas = sorted(df["disciplina"].dropna().unique().tolist())
     assuntos    = sorted(df["assunto"].dropna().unique().tolist())
@@ -3001,9 +3003,10 @@ def _dashboard_comparativo(
         '<div class="insight-body">'
         '<div class="insight-title">Modo comparativo ativo</div>'
         '<p class="insight-text">'
-        f'Comparando <strong>{len(alunos_sel)} alunos</strong>. '
-        'Os valores são exibidos separadamente — os dados <strong>não são somados</strong>. '
-        'Filtros de disciplina e período continuam sendo aplicados individualmente por aluno.'
+        f'Exibindo <strong>{len(alunos_sel)} aluno(s)</strong> em paralelo — '
+        'dados calculados <strong>individualmente por aluno</strong>, sem somar. '
+        'Para ver o dashboard individual, selecione apenas um aluno no filtro lateral. '
+        'Filtros de disciplina, período e status são aplicados individualmente por aluno.'
         '</p></div></div>'
     )
 
@@ -3083,6 +3086,7 @@ def _dashboard_comparativo(
         "📚 Disciplinas",
         "📅 Evolução",
         "🎯 Desempenho",
+        "🧠 Análise IA",
         "📋 Atividades",
     ])
 
@@ -3303,6 +3307,65 @@ def _dashboard_comparativo(
         )
 
     with abas[4]:
+        _titulo_secao(
+            "Análise inteligente por aluno",
+            "Insights automáticos gerados individualmente para cada aluno. "
+            "A IA compara os alunos entre si e gera recomendações personalizadas. "
+            "Os dados não são somados — cada análise é independente por aluno.",
+            "Comparativo",
+        )
+        render_html(
+            '<div class="insight-card info" style="margin-bottom:12px">'
+            '<div class="insight-icon">🧠</div>'
+            '<div class="insight-body">'
+            '<div class="insight-title">Análise comparativa de IA</div>'
+            '<p class="insight-text">'
+            'Cada expander abaixo contém a análise individual do aluno. '
+            'A IA identifica padrões, riscos de atraso, disciplinas críticas e '
+            'gera recomendações personalizadas com base no histórico de cada um.'
+            '</p></div></div>'
+        )
+        # Gera insights individuais para cada aluno
+        kpis_grupo = calcular_kpis_avancados(df_escopo, df_periodo, inicio_periodo, fim_periodo)
+        _aba_analise_ia(df_escopo, df_periodo, alunos_sel, kpis_grupo)
+
+        # Análise comparativa entre alunos
+        if len(dados_alunos) > 1:
+            st.markdown("---")
+            render_html('<div class="section-title">📊 Comparativo geral do grupo</div>')
+            mais_avancado  = max(dados_alunos, key=lambda d: d["kpis"]["pct_conclusao"])
+            menos_avancado = min(dados_alunos, key=lambda d: d["kpis"]["pct_conclusao"])
+            mais_horas     = max(dados_alunos, key=lambda d: d["kpis"]["horas_total"])
+            mais_produtivo = max(dados_alunos, key=lambda d: d["kpis"]["produtividade"])
+            menor_seq      = min(dados_alunos, key=lambda d: d["kpis"]["sequencia"])
+            insights_grupo = [
+                ("success", "🏆",
+                 f"{mais_avancado['nome']} está mais avançado",
+                 f"Progresso de {mais_avancado['kpis']['pct_conclusao']:.1f}% — "
+                 f"{mais_avancado['kpis']['qtd_concluidas']} tarefas concluídas de "
+                 f"{mais_avancado['kpis']['total_tarefas']}."),
+                ("warning", "⚠️",
+                 f"{menos_avancado['nome']} precisa de atenção",
+                 f"Progresso de {menos_avancado['kpis']['pct_conclusao']:.1f}% — "
+                 f"{menos_avancado['kpis']['tarefas_restantes']} tarefas restantes."),
+                ("info", "⏱️",
+                 f"{mais_horas['nome']} dedicou mais horas no período",
+                 f"{horas_para_hm(mais_horas['kpis']['horas_total'])} de estudo registradas."),
+                ("success", "⚡",
+                 f"{mais_produtivo['nome']} é o mais produtivo",
+                 f"{mais_produtivo['kpis']['produtividade']:.2f} tarefas concluídas por hora."),
+            ]
+            if menor_seq["kpis"]["sequencia"] == 0 or menor_seq["kpis"]["dias_sem_estudar"] >= 3:
+                insights_grupo.append((
+                    "danger", "🔴",
+                    f"{menor_seq['nome']} com baixa frequência",
+                    f"Sequência atual: {menor_seq['kpis']['sequencia']} dia(s). "
+                    f"{menor_seq['kpis']['dias_sem_estudar']} dia(s) sem registro."
+                ))
+            for tipo, icone, titulo, texto in insights_grupo:
+                render_html(insight_card(tipo, icone, titulo, texto))
+
+    with abas[5]:
         tabela = preparar_tabela(df_escopo[df_escopo["aluno"].isin(alunos_sel)])
         colunas = ["aluno","tarefa","disciplina","aula","assunto","tipo","status_label",
                    "data_execucao","tempo","qtd_questoes_feitas","qtd_acertos","desempenho","comentario"]
@@ -3326,11 +3389,19 @@ def dashboard():
         st.info("Nenhum registro encontrado com os filtros selecionados.")
         return
 
-    # ── Detecta modo: individual vs. comparativo ──
-    modo_comparativo = isinstance(visao, list) and len(visao) > 1
+    # ── Detecta modo ──
+    # individual  → visao é str (nome de um único aluno)
+    # comparativo → visao é list (múltiplos alunos OU "Todos os alunos")
+    modo_comparativo = isinstance(visao, list)
 
     if modo_comparativo:
-        _dashboard_comparativo(df_escopo, df_periodo, visao, inicio_periodo, fim_periodo)
+        alunos_no_escopo = sorted(df_escopo["aluno"].dropna().unique().tolist())
+        # Restringe à lista de alunos que têm dados no escopo filtrado
+        alunos_comp = [a for a in visao if a in alunos_no_escopo]
+        if not alunos_comp:
+            st.info("Nenhum dado encontrado para os alunos selecionados com os filtros aplicados.")
+            return
+        _dashboard_comparativo(df_escopo, df_periodo, alunos_comp, inicio_periodo, fim_periodo)
         return
 
     # ── Modo individual ──
@@ -3341,7 +3412,7 @@ def dashboard():
         "📌 Passe o mouse sobre ? para ver fórmula e interpretação. "
         "Âmbar = últimos 15 dias · Verde = escopo completo do filtro. "
         "Contagens estruturais (total, restantes, progresso) ignoram filtro de período. "
-        "Para comparar alunos, selecione mais de um no filtro Alunos."
+        "Para ver todos os alunos em paralelo, limpe o filtro Alunos."
     )
 
     _resumo_15dias(df_escopo)
