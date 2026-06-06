@@ -4789,10 +4789,14 @@ def tela_importacao():
                 _toast_sucesso(f"✅ {novos} novo(s) vínculo(s) criado(s). O dashboard já reflete as novas tarefas.")
             else:
                 st.info("Nenhuma tarefa pendente encontrada — todos os vínculos já existem.")
-        c2.metric("Disciplinas", int(consultar("SELECT COUNT(*) qtd FROM disciplinas WHERE ativo=1").iloc[0].qtd))
-        c3.metric("Aulas",      int(consultar("SELECT COUNT(*) qtd FROM aulas WHERE ativo=1").iloc[0].qtd))
-        c4.metric("Tarefas",    int(consultar("SELECT COUNT(*) qtd FROM tarefas WHERE ativo=1").iloc[0].qtd))
-        c5.metric("Execuções",  int(consultar("SELECT COUNT(*) qtd FROM execucoes").iloc[0].qtd))
+
+        st.markdown("---")
+        m1, m2, m3, m4, m5 = st.columns(5)
+        m1.metric("Estudantes",  int(consultar("SELECT COUNT(*) qtd FROM alunos WHERE perfil='Aluno' AND ativo=1").iloc[0].qtd))
+        m2.metric("Disciplinas", int(consultar("SELECT COUNT(*) qtd FROM disciplinas WHERE ativo=1").iloc[0].qtd))
+        m3.metric("Aulas",       int(consultar("SELECT COUNT(*) qtd FROM aulas WHERE ativo=1").iloc[0].qtd))
+        m4.metric("Tarefas",     int(consultar("SELECT COUNT(*) qtd FROM tarefas WHERE ativo=1").iloc[0].qtd))
+        m5.metric("Execuções",   int(consultar("SELECT COUNT(*) qtd FROM execucoes").iloc[0].qtd))
 
     # ── Aba 2: Ciclo Consolidado ──
     with abas[1]:
