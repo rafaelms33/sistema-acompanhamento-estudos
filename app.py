@@ -1215,6 +1215,35 @@ def importar_planilha_referencia(caminho=PLANILHA_REFERENCIA, substituir=False):
                         assunto_id,
                     ),
                 )
+
+            # ── Vincula novas tarefas aos alunos ativos ──
+            # Para cada tarefa que não tem execução para um aluno,
+            # cria um vínculo NAO_INICIADA.
+            # Tarefas que já têm execução (qualquer status) são ignoradas.
+            # Isso garante que o dashboard enxergue as novas tarefas
+            # sem afetar nenhum registro existente.
+            alunos_ativos_ids = [
+                row[0] for row in conn.execute(
+                    "SELECT id FROM alunos WHERE ativo = 1 AND perfil = 'Aluno'"
+                ).fetchall()
+            ]
+            if alunos_ativos_ids:
+                conn.execute(
+                    """
+                    INSERT INTO execucoes (aluno_id, tarefa_id, status, concluida)
+                    SELECT a.id, t.id, 'NAO_INICIADA', 0
+                    FROM tarefas t
+                    CROSS JOIN (
+                        SELECT id FROM alunos WHERE ativo = 1 AND perfil = 'Aluno'
+                    ) a
+                    WHERE t.ativo = 1
+                      AND NOT EXISTS (
+                          SELECT 1 FROM execucoes e
+                          WHERE e.aluno_id = a.id AND e.tarefa_id = t.id
+                      )
+                    """
+                )
+
     except Exception as exc:
         erro_usuario("Importação cancelada.", exc)
         return False
@@ -1222,7 +1251,36 @@ def importar_planilha_referencia(caminho=PLANILHA_REFERENCIA, substituir=False):
     return True
 
 
-def importar_execucoes_ciclo(caminho_excel):
+def vincular_tarefas_pendentes() -> int:
+    """
+    Cria vínculos NAO_INICIADA para tarefas que ainda não têm
+    nenhuma execução registrada para os alunos ativos.
+
+    Regras:
+    - Só cria vínculo quando NÃO existe execução alguma (qualquer status).
+    - Não toca em execuções existentes — histórico 100% preservado.
+    - Retorna a quantidade de novos vínculos criados.
+    """
+    with conectar() as conn:
+        antes = conn.execute("SELECT COUNT(*) FROM execucoes").fetchone()[0]
+        conn.execute(
+            """
+            INSERT INTO execucoes (aluno_id, tarefa_id, status, concluida)
+            SELECT a.id, t.id, 'NAO_INICIADA', 0
+            FROM tarefas t
+            CROSS JOIN (
+                SELECT id FROM alunos WHERE ativo = 1 AND perfil = 'Aluno'
+            ) a
+            WHERE t.ativo = 1
+              AND NOT EXISTS (
+                  SELECT 1 FROM execucoes e
+                  WHERE e.aluno_id = a.id AND e.tarefa_id = t.id
+              )
+            """
+        )
+        depois = conn.execute("SELECT COUNT(*) FROM execucoes").fetchone()[0]
+    limpar_cache()
+    return int(depois - antes)
     """
     Importador legado: lê aba CICLO_REG com um aluno por arquivo.
     Mantido por compatibilidade com arquivos individuais.
@@ -4712,8 +4770,25 @@ def tela_importacao():
                 st.rerun()
 
         st.markdown("---")
-        c1, c2, c3, c4, c5 = st.columns(5)
-        c1.metric("Estudantes", int(consultar("SELECT COUNT(*) qtd FROM alunos WHERE perfil='Aluno' AND ativo=1").iloc[0].qtd))
+        render_html(
+            '<div class="insight-card info" style="margin-bottom:10px">'
+            '<div class="insight-icon">🔗</div>'
+            '<div class="insight-body">'
+            '<div class="insight-title">Vincular tarefas pendentes aos alunos</div>'
+            '<p class="insight-text">'
+            'Se o dashboard não exibe tarefas novas da planilha, use este botão. '
+            'Ele cria vínculos <strong>Não iniciada</strong> para tarefas que ainda não '
+            'aparecem no acompanhamento de nenhum aluno. '
+            '<strong>Não altera nenhum registro existente</strong> — histórico de execuções preservado.'
+            '</p></div></div>'
+        )
+        if st.button("🔗 Vincular tarefas pendentes aos alunos", key="btn_vincular_pendentes"):
+            with st.spinner("Verificando e vinculando tarefas pendentes…"):
+                novos = vincular_tarefas_pendentes()
+            if novos > 0:
+                _toast_sucesso(f"✅ {novos} novo(s) vínculo(s) criado(s). O dashboard já reflete as novas tarefas.")
+            else:
+                st.info("Nenhuma tarefa pendente encontrada — todos os vínculos já existem.")
         c2.metric("Disciplinas", int(consultar("SELECT COUNT(*) qtd FROM disciplinas WHERE ativo=1").iloc[0].qtd))
         c3.metric("Aulas",      int(consultar("SELECT COUNT(*) qtd FROM aulas WHERE ativo=1").iloc[0].qtd))
         c4.metric("Tarefas",    int(consultar("SELECT COUNT(*) qtd FROM tarefas WHERE ativo=1").iloc[0].qtd))
