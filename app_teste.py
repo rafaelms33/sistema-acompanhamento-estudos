@@ -2275,29 +2275,9 @@ def calcular_kpis_avancados(
     acertos     = int(per_anal["qtd_acertos"].sum())
     desempenho  = acertos / questoes * 100 if questoes else 0
 
-    # Dias ativos no PERÍODO: união de data_execucao + sessoes_estudo no intervalo
-    datas_periodo = set(per_anal["data_ref"].dropna().dt.date.tolist())
-    try:
-        sess_per = carregar_sessoes_dashboard()
-        if not sess_per.empty and "aluno_id" in sess_per.columns:
-            aluno_ids_per = (
-                set(df_escopo["aluno_id"].unique())
-                if "aluno_id" in df_escopo.columns else set()
-            )
-            if aluno_ids_per:
-                sess_per = sess_per[sess_per["aluno_id"].isin(aluno_ids_per)]
-        if not sess_per.empty and "data_sessao" in sess_per.columns:
-            datas_sess_per = pd.to_datetime(sess_per["data_sessao"], errors="coerce").dropna().dt.date
-            # Filtra pelo intervalo do período
-            if inicio_periodo:
-                datas_sess_per = datas_sess_per[datas_sess_per >= inicio_periodo]
-            if fim_periodo:
-                datas_sess_per = datas_sess_per[datas_sess_per <= fim_periodo]
-            datas_periodo = datas_periodo | set(datas_sess_per.tolist())
-    except Exception:
-        pass
-    dias_unicos     = sorted(datas_periodo)
-    qtd_dias_ativos = len(dias_unicos)
+    dias_ativos_series = per_anal["data_ref"].dropna().dt.date
+    dias_unicos        = sorted(set(dias_ativos_series.tolist()))
+    qtd_dias           = len(dias_unicos)
 
     _ini = inicio_periodo or (min(dias_unicos) if dias_unicos else None)
     _fim = fim_periodo    or (max(dias_unicos) if dias_unicos else None)
@@ -2321,41 +2301,14 @@ def calcular_kpis_avancados(
     conc_sem_pas  = int((exec_sem_pas["status"] == STATUS_CONCLUIDA).sum())
     conc_periodo  = len(per_conc)
 
-    # Sequência, dias ativos e dias sem estudar
-    # Fonte primária: sessoes_estudo (tarefas EM_ANDAMENTO ou CONCLUIDAS)
-    # Fallback: data_execucao de esc_anal
-    # dias_sem_estudar nunca negativo (datas futuras → max 0)
-    datas_execucao = set(esc_anal["data_ref"].dropna().dt.date.tolist())
-
-    try:
-        sess_df = carregar_sessoes_dashboard()
-        if not sess_df.empty and "aluno_id" in sess_df.columns:
-            aluno_ids_escopo = (
-                set(df_escopo["aluno_id"].unique())
-                if "aluno_id" in df_escopo.columns else set()
-            )
-            if aluno_ids_escopo:
-                sess_df = sess_df[sess_df["aluno_id"].isin(aluno_ids_escopo)]
-        if not sess_df.empty and "data_sessao" in sess_df.columns:
-            datas_sessoes = set(
-                pd.to_datetime(sess_df["data_sessao"], errors="coerce")
-                .dropna().dt.date.tolist()
-            )
-            datas_execucao = datas_execucao | datas_sessoes
-    except Exception:
-        pass
-
-    todas_datas = sorted(datas_execucao)
-    # qtd_dias_ativos já calculado acima com base no período
-
+    # Sequência e dias sem estudar (sobre escopo total)
     sequencia = 0
-    if todas_datas:
+    if dias_unicos:
         d = hoje
-        while d in todas_datas:
+        while d in dias_unicos:
             sequencia += 1
             d -= timedelta(days=1)
-
-    dias_sem_estudar = max(0, (hoje - max(todas_datas)).days) if todas_datas else 0
+    dias_sem_estudar = (hoje - max(dias_unicos)).days if dias_unicos else 0
 
     produtividade = qtd_concluidas / horas_total if horas_total else 0
 
@@ -2409,7 +2362,7 @@ def calcular_kpis_avancados(
         "questoes":             questoes,
         "acertos":              acertos,
         "desempenho":           desempenho,
-        "qtd_dias_ativos":      qtd_dias_ativos,
+        "qtd_dias_ativos":      qtd_dias,
         "dias_uteis":           dias_uteis,
         "media_diaria":         media_diaria,
         "media_diaria_label":   media_diaria_label,
@@ -2420,7 +2373,7 @@ def calcular_kpis_avancados(
         "previsao_conclusao":   previsao,
         "previsao_base":        previsao_base,
         "horas_restantes":      horas_restantes,
-        "dias_unicos":          todas_datas,   # todas as datas de estudo do escopo
+        "dias_unicos":          dias_unicos,
     }
 
 def calcular_metricas(df_escopo, df_periodo=None, inicio_periodo=None, fim_periodo=None):
@@ -2659,7 +2612,6 @@ def _render_kpis_produtividade(kpis: dict):
             tooltip=(
                 "Quantos dias seguidos (contando de hoje para trás) houve pelo menos 1 execução. "
                 "Reinicia quando há um dia sem registro. "
-                "⚠️ Não é afetado pelo filtro de período — considera todo o histórico do aluno. "
                 "Sequências longas indicam hábito de estudo consolidado."
             ),
         ),
@@ -2670,8 +2622,8 @@ def _render_kpis_produtividade(kpis: dict):
             delta_pos=False,
             tooltip=(
                 "Quantidade de dias desde o último registro de execução. "
-                "0 = estudou hoje. Acima de 3 dias = alerta de perda de ritmo. "
-                "⚠️ Não é afetado pelo filtro de período — sempre considera a data mais recente no histórico total."
+                "0 = estudou hoje. Acima de 3 dias consecutivos = alerta de perda de ritmo. "
+                "Não é afetado pelo filtro de período — sempre considera a data mais recente no banco."
             ),
         ),
         kpi_card(
@@ -2800,11 +2752,11 @@ def _render_kpis_desempenho(kpis: dict):
         ),
         kpi_card(
             "Dias ativos", f"{kpis['qtd_dias_ativos']}",
-            "dias com pelo menos 1 registro (histórico total)",
+            "dias com pelo menos 1 registro",
             tooltip=(
-                "Número de dias distintos com pelo menos uma execução no escopo filtrado. "
-                "⚠️ Não é afetado pelo filtro de período — considera todo o histórico do aluno. "
-                "Maior número = hábito de estudo mais sólido e frequência consistente."
+                "Número de dias distintos com pelo menos uma execução registrada no período filtrado. "
+                "Indica frequência e consistência. "
+                "Maior número de dias = hábito de estudo mais sólido."
             ),
         ),
     ]
@@ -3429,20 +3381,12 @@ def _dashboard_comparativo(
 
     st.markdown("---")
 
-    # Pre-computa per_anal_todos (usado em Evolução e Ranking)
-    per_anal_todos = df_periodo[df_periodo["status"].isin(STATUS_ANALISE)].copy()
-    if "data_ref" not in per_anal_todos.columns:
-        per_anal_todos["data_ref"] = pd.to_datetime(
-            per_anal_todos.get("data_execucao", pd.Series(dtype=str)), errors="coerce")
-    per_anal_todos = per_anal_todos[per_anal_todos["aluno"].isin(alunos_sel)]
-
     # ── Gráficos ──
     abas = st.tabs([
         "📊 Horas & Progresso",
         "📚 Disciplinas",
         "📅 Evolução",
         "🎯 Desempenho",
-        "🏆 Ranking",
         "🧠 Análise IA",
         "📋 Atividades",
     ])
@@ -3585,6 +3529,12 @@ def _dashboard_comparativo(
             "Evolução diária e semanal de horas por aluno. "
             "Cada linha/barra representa um aluno separadamente."
         ))
+        per_anal_todos = df_periodo[df_periodo["status"].isin(STATUS_ANALISE)].copy()
+        if "data_ref" not in per_anal_todos.columns:
+            per_anal_todos["data_ref"] = pd.to_datetime(
+                per_anal_todos.get("data_execucao", pd.Series(dtype=str)), errors="coerce")
+        per_anal_todos = per_anal_todos[per_anal_todos["aluno"].isin(alunos_sel)]
+
         evo = per_anal_todos.dropna(subset=["data_ref"]).copy()
         if not evo.empty:
             evo["dia"] = evo["data_ref"].dt.date
@@ -3659,17 +3609,9 @@ def _dashboard_comparativo(
 
     with abas[4]:
         _titulo_secao(
-            "Ranking comparativo",
-            "Classificação dos alunos por produtividade, consistência e desempenho. "
-            "Valores calculados individualmente — não somados.",
-            "Comparativo",
-        )
-        _aba_ranking(per_anal_todos if not per_anal_todos.empty else df_escopo[df_escopo["status"].isin(STATUS_ANALISE)])
-
-    with abas[5]:
-        _titulo_secao(
             "Análise inteligente por aluno",
             "Insights automáticos gerados individualmente para cada aluno. "
+            "A IA compara os alunos entre si e gera recomendações personalizadas. "
             "Os dados não são somados — cada análise é independente por aluno.",
             "Comparativo",
         )
@@ -3684,9 +3626,11 @@ def _dashboard_comparativo(
             'gera recomendações personalizadas com base no histórico de cada um.'
             '</p></div></div>'
         )
+        # Gera insights individuais para cada aluno
         kpis_grupo = calcular_kpis_avancados(df_escopo, df_periodo, inicio_periodo, fim_periodo)
         _aba_analise_ia(df_escopo, df_periodo, alunos_sel, kpis_grupo)
 
+        # Análise comparativa entre alunos
         if len(dados_alunos) > 1:
             st.markdown("---")
             render_html('<div class="section-title">📊 Comparativo geral do grupo</div>')
@@ -3722,7 +3666,7 @@ def _dashboard_comparativo(
             for tipo, icone, titulo, texto in insights_grupo:
                 render_html(insight_card(tipo, icone, titulo, texto))
 
-    with abas[6]:
+    with abas[5]:
         tabela = preparar_tabela(df_escopo[df_escopo["aluno"].isin(alunos_sel)])
         colunas = ["aluno","tarefa","disciplina","aula","assunto","tipo","status_label",
                    "data_execucao","tempo","qtd_questoes_feitas","qtd_acertos","desempenho","comentario"]
@@ -3736,44 +3680,18 @@ def dashboard():
           <p>Dashboard analítico: produtividade, avanço, desempenho, evolução e análise inteligente.</p>
         </div>
     """)
-    df        = carregar_execucoes()
-    df_sessoes = carregar_sessoes_dashboard()
+    df = carregar_execucoes()           # estado atual (status, progresso)
+    df_sessoes = carregar_sessoes_dashboard()  # sessões reais (horas por período)
     if df.empty:
         st.info("Cadastre alunos, tarefas e registros para iniciar o acompanhamento.")
         return
 
-    # painel_filtros chamado UMA única vez — retorna escopo estrutural e período
-    df_escopo, df_periodo_exec, visao, inicio_periodo, fim_periodo = painel_filtros(df, "dash")
+    # painel_filtros usa df_sessoes para métricas temporais corretas
+    df_esc_struct, _, visao, inicio_periodo, fim_periodo = painel_filtros(df, "dash")
+    _, df_per_temporal, _, _, _ = painel_filtros(df_sessoes, "dash")
 
-    # Aplica os mesmos filtros de aluno/disciplina/período ao df de sessões
-    # sem chamar painel_filtros novamente (evita widgets duplicados)
-    df_periodo = df_sessoes.copy()
-    df_periodo["data_ref"] = pd.to_datetime(df_periodo["data_execucao"], errors="coerce")
-
-    # Filtro de aluno
-    if isinstance(visao, list):
-        df_periodo = df_periodo[df_periodo["aluno"].isin(visao)]
-    elif visao != "Todos":
-        df_periodo = df_periodo[df_periodo["aluno"] == visao]
-
-    # Filtro de período (apenas em registros com data)
-    ts_inicio = pd.Timestamp(inicio_periodo) if inicio_periodo else None
-    ts_fim    = pd.Timestamp(fim_periodo)    if fim_periodo    else None
-    if ts_inicio:
-        sem_data   = df_periodo["data_ref"].isna()
-        com_data   = df_periodo["data_ref"].notna() & (df_periodo["data_ref"] >= ts_inicio)
-        df_periodo = df_periodo[sem_data | com_data]
-    if ts_fim:
-        sem_data   = df_periodo["data_ref"].isna()
-        com_data   = df_periodo["data_ref"].notna() & (
-            df_periodo["data_ref"] <= ts_fim + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
-        )
-        df_periodo = df_periodo[sem_data | com_data]
-
-    # Filtro de disciplina (se aplicado nos filtros da sidebar)
-    disc_filtro = st.session_state.get("dash_disciplina", [])
-    if disc_filtro:
-        df_periodo = df_periodo[df_periodo["disciplina"].isin(disc_filtro)]
+    df_escopo  = df_esc_struct   # estrutural: status, total tarefas, progresso
+    df_periodo = df_per_temporal  # temporal: horas, questões, acertos por período
     if df_escopo.empty:
         st.info("Nenhum registro encontrado com os filtros selecionados.")
         return
@@ -4155,8 +4073,6 @@ def _rr_selectbox(grupo: pd.DataFrame, status: str, label: str) -> pd.Series | N
     if grupo.empty:
         return None
 
-    # Garante ordem numérica do plano, independente da ordem de chegada do DataFrame
-    grupo = grupo.sort_values("tarefa").reset_index(drop=True)
     ids      = grupo["tarefa_id"].tolist()
     id_salvo = _rr_get_tarefa_id(status)
 
@@ -4189,8 +4105,11 @@ def _rr_formulario(
     status_alvo: str,
 ) -> None:
     """
-    Formulário unificado: status + sessão em um único submit.
-    Se horas e questões forem zero, apenas o status é atualizado.
+    Formulário de registro com sessões de estudo.
+
+    Parte 1 — Status da tarefa: altera apenas o status/tipo (não toca em horas).
+    Parte 2 — Nova sessão: registra horas, questões e acertos desta sessão.
+    Parte 3 — Histórico de sessões: lista e permite excluir sessões anteriores.
     """
     tarefa_id    = int(tarefa["tarefa_id"])
     eh_concluida = (status_alvo == STATUS_CONCLUIDA)
@@ -4209,191 +4128,173 @@ def _rr_formulario(
     tipo_atual   = str(tarefa.get("tipo") or "Outro")
     tipo_idx     = TIPOS_ESTUDO.index(tipo_atual) if tipo_atual in TIPOS_ESTUDO else TIPOS_ESTUDO.index("Outro")
 
-    render_html(
-        '<div class="section-title">✏️ Atualizar status e registrar sessão</div>'
-        '<div class="insight-card info" style="margin-bottom:10px">'
-        '<div class="insight-icon">ℹ️</div>'
-        '<div class="insight-body">'
-        '<p class="insight-text" style="margin:0">'
-        'Atualize o status e, opcionalmente, registre as horas desta sessão. '
-        'Se não houver horas nem questões, deixe os campos zerados — '
-        'apenas o status será atualizado.'
-        '</p></div></div>'
-    )
-
-    with st.form(f"rr_form_{status_alvo}_{tarefa_id}"):
+    # ── Parte 1: Status da tarefa ──
+    render_html('<div class="section-title">📋 Status da tarefa</div>')
+    with st.form(f"rr_status_{status_alvo}_{tarefa_id}"):
         col1, col2 = st.columns(2)
         novo_status = col1.selectbox(
-            "Status da tarefa", STATUS_VALIDOS,
+            "Status", STATUS_VALIDOS,
             index=STATUS_VALIDOS.index(status_atual),
             format_func=lambda v: STATUS_LABELS[v],
         )
         tipo_estudo = col2.selectbox("Tipo de estudo", TIPOS_ESTUDO, index=tipo_idx)
 
-        st.markdown("---")
-        render_html('<div style="font-size:.8rem;font-weight:700;color:#475569;margin-bottom:4px">⏱️ Sessão de estudo (opcional)</div>')
+        if eh_concluida:
+            confirmado = st.checkbox(
+                "✅ Confirmo alteração em tarefa já concluída", value=False
+            )
+        else:
+            confirmado = True
 
+        salvar_status = st.form_submit_button("💾 Atualizar status", type="primary")
+
+    if salvar_status:
+        if eh_concluida and not confirmado:
+            render_html('<div class="rule-error">❌ Marque a confirmação para alterar tarefa concluída.</div>')
+        else:
+            pode, msg_bloqueio = _verificar_regra_andamento(
+                tarefas_df, tarefa, novo_status, int(tarefa["disciplina_id"])
+            )
+            if not pode:
+                render_html(f'<div class="rule-error">❌ {escape_html(msg_bloqueio)}</div>')
+            else:
+                try:
+                    with st.spinner("Atualizando status…"):
+                        with conectar() as conn:
+                            conn.execute(
+                                """
+                                UPDATE execucoes SET
+                                    status = ?, tipo_estudo = ?, concluida = ?,
+                                    atualizado_em = CURRENT_TIMESTAMP
+                                WHERE aluno_id = ? AND tarefa_id = ?
+                                """,
+                                (novo_status, tipo_estudo,
+                                 1 if novo_status == STATUS_CONCLUIDA else 0,
+                                 aluno_id, tarefa_id),
+                            )
+                    limpar_cache()
+                    status_ant = STATUS_LABELS.get(status_atual, status_atual)
+                    status_nov = STATUS_LABELS.get(novo_status, novo_status)
+                    _toast_sucesso(
+                        f"Status atualizado: {status_ant} → {status_nov}."
+                        if status_atual != novo_status else "Tipo de estudo atualizado."
+                    )
+                    st.rerun()
+                except Exception as exc:
+                    erro_usuario("❌ Não foi possível atualizar o status.", exc)
+
+    st.markdown("---")
+
+    # ── Parte 2: Registrar nova sessão ──
+    render_html('<div class="section-title">⏱️ Registrar nova sessão de estudo</div>')
+    render_html(
+        '<div class="insight-card info" style="margin-bottom:10px">'
+        '<div class="insight-icon">ℹ️</div>'
+        '<div class="insight-body">'
+        '<p class="insight-text" style="margin:0">Registre as horas <strong>desta sessão</strong>. '
+        'Cada sessão é salva separadamente — o histórico completo fica preservado e '
+        'os totais são recalculados automaticamente.</p>'
+        '</div></div>'
+    )
+
+    with st.form(f"rr_sessao_{status_alvo}_{tarefa_id}"):
         col1, col2, col3 = st.columns(3)
         data_sessao = col1.date_input("Data da sessão", value=date.today())
         ch_h = col2.number_input("Horas", min_value=0, value=0, step=1)
         ch_m = col3.number_input("Minutos", min_value=0, max_value=59, value=0, step=5)
 
         col4, col5 = st.columns(2)
-        questoes = col4.number_input("Questões desta sessão", min_value=0, value=0, step=1)
-        acertos  = col5.number_input("Acertos desta sessão",  min_value=0, value=0, step=1)
+        questoes = col4.number_input("Questões feitas nesta sessão", min_value=0, value=0, step=1)
+        acertos  = col5.number_input("Acertos nesta sessão", min_value=0, value=0, step=1)
 
         comentario = st.text_area(
             "Observações desta sessão",
-            placeholder="O que foi estudado, dificuldades, conteúdos… (opcional)",
+            placeholder="O que foi estudado, dificuldades, conteúdos…",
             height=80,
         )
+        registrar = st.form_submit_button("➕ Registrar sessão", type="primary", use_container_width=True)
 
-        if eh_concluida:
-            confirmado = st.checkbox(
-                "✅ Confirmo que desejo alterar este registro já concluído", value=False
-            )
+    if registrar:
+        ch = hm_para_horas(ch_h, ch_m)
+        if ch == 0 and questoes == 0:
+            st.warning("Informe ao menos o tempo ou as questões da sessão.")
+        elif acertos > questoes:
+            render_html('<div class="rule-error">❌ Acertos não podem ser maiores que questões.</div>')
         else:
-            confirmado = True
-
-        col_b1, col_b2 = st.columns([3, 1])
-        salvar   = col_b1.form_submit_button("💾 Salvar", type="primary", use_container_width=True)
-        cancelar = col_b2.form_submit_button("✖ Cancelar", use_container_width=True)
-
-    if cancelar:
-        st.info("Nenhuma alteração foi salva.")
-        _rr_historico(aluno_id, tarefa_id)
-        return
-
-    if not salvar:
-        _rr_historico(aluno_id, tarefa_id)
-        return
-
-    # Validações
-    ch = hm_para_horas(ch_h, ch_m)
-    erros: list[str] = []
-    if eh_concluida and not confirmado:
-        erros.append("Para alterar uma tarefa já concluída, marque a confirmação acima.")
-    if acertos > questoes:
-        erros.append("O número de acertos não pode ser maior que o número de questões.")
-    pode, msg_bloqueio = _verificar_regra_andamento(
-        tarefas_df, tarefa, novo_status, int(tarefa["disciplina_id"]))
-    if not pode:
-        erros.append(msg_bloqueio)
-
-    if erros:
-        for e in erros:
-            render_html(f'<div class="rule-error">❌ {escape_html(e)}</div>')
-        _rr_historico(aluno_id, tarefa_id)
-        return
-
-    # Gravação
-    try:
-        with st.spinner("Salvando…"):
-            with conectar() as conn:
-                conn.execute(
-                    """UPDATE execucoes SET status=?, tipo_estudo=?, concluida=?,
-                       atualizado_em=CURRENT_TIMESTAMP
-                       WHERE aluno_id=? AND tarefa_id=?""",
-                    (novo_status, tipo_estudo,
-                     1 if novo_status == STATUS_CONCLUIDA else 0,
-                     aluno_id, tarefa_id),
-                )
-                tem_sessao = ch > 0 or questoes > 0
-                if tem_sessao:
-                    conn.execute(
-                        """INSERT INTO sessoes_estudo
-                           (aluno_id,tarefa_id,data_sessao,ch_sessao,
-                            qtd_questoes,qtd_acertos,tipo_estudo,comentario)
-                           VALUES (?,?,?,?,?,?,?,?)""",
-                        (aluno_id, tarefa_id, str(data_sessao),
-                         float(ch), int(questoes), int(acertos),
-                         normalizar_tipo_estudo(tipo_estudo),
-                         limpar_texto(comentario)),
+            try:
+                with st.spinner("Salvando sessão…"):
+                    inserir_sessao(
+                        aluno_id, tarefa_id, str(data_sessao),
+                        ch, questoes, acertos,
+                        tipo_estudo, limpar_texto(comentario),
                     )
-                    _recalcular_execucao_por_sessoes(conn, aluno_id, tarefa_id)
+                partes = [f"Sessão de {horas_para_hm(ch)} registrada com sucesso."]
+                if questoes > 0:
+                    partes.append(f"{acertos}/{questoes} acertos.")
+                _toast_sucesso(" ".join(partes))
+                st.rerun()
+            except Exception as exc:
+                erro_usuario("❌ Não foi possível registrar a sessão.", exc)
 
-        limpar_cache()
-
-        status_ant = STATUS_LABELS.get(status_atual, status_atual)
-        status_nov = STATUS_LABELS.get(novo_status, novo_status)
-        partes = []
-        if status_atual != novo_status:
-            partes.append(f"Status: {status_ant} → {status_nov}.")
-        else:
-            partes.append("Status mantido.")
-        if tem_sessao:
-            partes.append(f"Sessão: {horas_para_hm(ch)}.")
-            if questoes > 0:
-                partes.append(f"{acertos}/{questoes} acertos.")
-        else:
-            partes.append("Nenhuma sessão registrada.")
-
-        if status_atual != novo_status:
-            _rr_set_tarefa_id(status_alvo, None)
-
-        _toast_sucesso(" ".join(partes))
-        st.rerun()
-
-    except Exception as exc:
-        erro_usuario("❌ Não foi possível salvar.", exc)
-
-    _rr_historico(aluno_id, tarefa_id)
-
-
-def _rr_historico(aluno_id: int, tarefa_id: int) -> None:
-    """Histórico de sessões com totais e exclusão."""
     st.markdown("---")
+
+    # ── Parte 3: Histórico de sessões ──
     render_html('<div class="section-title">📅 Histórico de sessões</div>')
     sessoes = carregar_sessoes(aluno_id, tarefa_id)
 
     if sessoes.empty:
         st.info("Nenhuma sessão registrada para esta tarefa.")
-        return
+    else:
+        # Totais acumulados
+        total_h = float(sessoes["ch_sessao"].sum())
+        total_q = int(sessoes["qtd_questoes"].sum())
+        total_a = int(sessoes["qtd_acertos"].sum())
+        des_tot = round(total_a / total_q * 100, 1) if total_q else 0
 
-    total_h = float(sessoes["ch_sessao"].sum())
-    total_q = int(sessoes["qtd_questoes"].sum())
-    total_a = int(sessoes["qtd_acertos"].sum())
-    des_tot = round(total_a / total_q * 100, 1) if total_q else 0
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Total de horas", horas_para_hm(total_h))
+        c2.metric("Total de questões", str(total_q))
+        c3.metric("Total de acertos", str(total_a))
+        c4.metric("Desempenho geral", f"{des_tot}%")
 
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Total de horas", horas_para_hm(total_h))
-    c2.metric("Total de questões", str(total_q))
-    c3.metric("Total de acertos", str(total_a))
-    c4.metric("Desempenho geral", f"{des_tot}%")
-
-    st.dataframe(
-        sessoes.rename(columns={
-            "data_sessao":"Data","ch_sessao":"Tempo (h)",
-            "qtd_questoes":"Questões","qtd_acertos":"Acertos",
-            "desempenho_sessao":"Desempenho (%)","tipo_estudo":"Tipo","comentario":"Observações",
-        })[["Data","Tempo (h)","Questões","Acertos","Desempenho (%)","Tipo","Observações"]],
-        use_container_width=True, hide_index=True,
-    )
-
-    with st.expander("🗑️ Excluir uma sessão"):
-        render_html(
-            '<div class="rule-warning" style="margin-bottom:8px">'
-            '⚠️ A exclusão reduz os totais acumulados da tarefa. Ação irreversível.'
-            '</div>'
+        st.dataframe(
+            sessoes.rename(columns={
+                "data_sessao": "Data", "ch_sessao": "Tempo (h)",
+                "qtd_questoes": "Questões", "qtd_acertos": "Acertos",
+                "desempenho_sessao": "Desempenho (%)",
+                "tipo_estudo": "Tipo", "comentario": "Observações",
+            })[["Data","Tempo (h)","Questões","Acertos","Desempenho (%)","Tipo","Observações"]],
+            use_container_width=True, hide_index=True,
         )
-        ids_sessoes = sessoes["id"].tolist()
-        sel_id = st.selectbox(
-            "Selecione a sessão", ids_sessoes,
-            format_func=lambda v: (
-                f"{sessoes.loc[sessoes['id']==v,'data_sessao'].iloc[0]} — "
-                f"{horas_para_hm(float(sessoes.loc[sessoes['id']==v,'ch_sessao'].iloc[0]))} — "
-                f"{int(sessoes.loc[sessoes['id']==v,'qtd_questoes'].iloc[0])} questões"
-            ),
-            key=f"del_sessao_{tarefa_id}",
-        )
-        conf_del = st.checkbox("Confirmo a exclusão desta sessão", key=f"conf_del_{tarefa_id}")
-        if st.button("🗑️ Excluir sessão", disabled=not conf_del, key=f"btn_del_{tarefa_id}"):
-            try:
-                excluir_sessao(sel_id, aluno_id, tarefa_id)
-                _toast_sucesso("Sessão excluída. Totais recalculados.")
-                st.rerun()
-            except Exception as exc:
-                erro_usuario("❌ Não foi possível excluir a sessão.", exc)
+
+        # Exclusão de sessão
+        with st.expander("🗑️ Excluir uma sessão"):
+            render_html(
+                '<div class="rule-warning" style="margin-bottom:8px">'
+                '⚠️ A exclusão de uma sessão <strong>reduz os totais acumulados</strong> '
+                'da tarefa (horas, questões, acertos). Esta ação não pode ser desfeita.'
+                '</div>'
+            )
+            ids_sessoes = sessoes["id"].tolist()
+            sel_id = st.selectbox(
+                "Selecione a sessão",
+                ids_sessoes,
+                format_func=lambda v: (
+                    f"{sessoes.loc[sessoes['id']==v,'data_sessao'].iloc[0]} — "
+                    f"{horas_para_hm(float(sessoes.loc[sessoes['id']==v,'ch_sessao'].iloc[0]))} — "
+                    f"{int(sessoes.loc[sessoes['id']==v,'qtd_questoes'].iloc[0])} questões"
+                ),
+                key=f"del_sessao_{tarefa_id}",
+            )
+            conf_del = st.checkbox("Confirmo a exclusão desta sessão", key=f"conf_del_{tarefa_id}")
+            if st.button("🗑️ Excluir sessão", disabled=not conf_del, key=f"btn_del_{tarefa_id}"):
+                try:
+                    excluir_sessao(sel_id, aluno_id, tarefa_id)
+                    _toast_sucesso("Sessão excluída. Totais recalculados.")
+                    st.rerun()
+                except Exception as exc:
+                    erro_usuario("❌ Não foi possível excluir a sessão.", exc)
+
 
 def tela_registro_rapido():
     render_html(
@@ -4443,9 +4344,9 @@ def tela_registro_rapido():
         st.info("Nenhuma tarefa vinculada a este aluno. Vá em **Tarefas** para vincular.")
         return
 
-    grupo_nao  = tarefas[tarefas["status"] == STATUS_NAO_INICIADA].sort_values("tarefa").reset_index(drop=True)
-    grupo_and  = tarefas[tarefas["status"] == STATUS_EM_ANDAMENTO].sort_values("tarefa").reset_index(drop=True)
-    grupo_conc = tarefas[tarefas["status"] == STATUS_CONCLUIDA].sort_values("tarefa").reset_index(drop=True)
+    grupo_nao  = tarefas[tarefas["status"] == STATUS_NAO_INICIADA].copy()
+    grupo_and  = tarefas[tarefas["status"] == STATUS_EM_ANDAMENTO].copy()
+    grupo_conc = tarefas[tarefas["status"] == STATUS_CONCLUIDA].copy()
 
     qtd_nao  = len(grupo_nao)
     qtd_and  = len(grupo_and)
@@ -4525,29 +4426,23 @@ def tela_registro_rapido():
                 _rr_formulario(tarefas, tarefa, aluno_id, STATUS_CONCLUIDA)
 
     # ── Histórico recente ──
-    # Histórico recente: últimas sessões reais do aluno (uma linha por sessão)
-    recentes = carregar_sessoes_aluno(aluno_id).head(10)
+    recentes = carregar_execucoes()
+    recentes = recentes[recentes["aluno_id"] == aluno_id].head(10)
     if not recentes.empty:
         st.markdown("---")
-        render_html('<div class="section-title">📋 Histórico recente de sessões</div>')
-        # carregar_sessoes_aluno retorna: data_sessao, ch_sessao, qtd_questoes, qtd_acertos,
-        # tipo_estudo, comentario, tarefa, disciplina, assunto
-        recentes["tempo"] = recentes["ch_sessao"].apply(horas_para_hm)
-        recentes["desempenho"] = recentes.apply(
-            lambda r: f"{round(r['qtd_acertos']/r['qtd_questoes']*100,1)}%"
-            if r["qtd_questoes"] > 0 else "—", axis=1
-        )
+        render_html('<div class="section-title">📋 Histórico recente</div>')
+        tabela  = preparar_tabela(recentes)
+        colunas = ["tarefa","disciplina","assunto","tipo","status_label",
+                   "data_execucao","tempo","qtd_questoes_feitas","qtd_acertos",
+                   "desempenho","comentario"]
         st.dataframe(
-            recentes.rename(columns={
-                "data_sessao": "Data", "tarefa": "Tarefa",
-                "disciplina": "Disciplina", "assunto": "Assunto",
-                "tipo_estudo": "Tipo", "tempo": "Tempo",
-                "qtd_questoes": "Questões", "qtd_acertos": "Acertos",
-                "desempenho": "Desempenho", "comentario": "Observações",
-            })[[
-                "Data","Tarefa","Disciplina","Assunto","Tipo",
-                "Tempo","Questões","Acertos","Desempenho","Observações",
-            ]],
+            tabela[[c for c in colunas if c in tabela.columns]].rename(columns={
+                "tarefa":"Tarefa","disciplina":"Disciplina","assunto":"Assunto",
+                "tipo":"Tipo","status_label":"Status","data_execucao":"Data",
+                "tempo":"Tempo","qtd_questoes_feitas":"Questões",
+                "qtd_acertos":"Acertos","desempenho":"Desempenho (%)",
+                "comentario":"Observações",
+            }),
             use_container_width=True, hide_index=True, row_height=64,
         )
 
