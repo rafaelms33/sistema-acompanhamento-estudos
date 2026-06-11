@@ -1283,7 +1283,7 @@ def carregar_sessoes(aluno_id: int, tarefa_id: int) -> pd.DataFrame:
             s.id, s.data_sessao, s.ch_sessao,
             s.qtd_questoes, s.qtd_acertos, s.tipo_estudo, s.comentario, s.criado_em,
             CASE WHEN s.qtd_questoes > 0
-                 THEN ROUND(CAST(s.qtd_acertos AS REAL) / s.qtd_questoes * 100, 1)
+                 THEN ROUND(CAST(s.qtd_acertos AS NUMERIC) / s.qtd_questoes * 100, 1)
                  ELSE 0 END AS desempenho_sessao
         FROM sessoes_estudo s
         WHERE s.aluno_id = ? AND s.tarefa_id = ?
@@ -1965,7 +1965,7 @@ def carregar_sessoes_dashboard() -> pd.DataFrame:
             s.qtd_questoes AS qtd_questoes_feitas,
             s.qtd_acertos,
             CASE WHEN s.qtd_questoes > 0
-                 THEN ROUND(CAST(s.qtd_acertos AS REAL) / s.qtd_questoes * 100, 2)
+                 THEN ROUND(CAST(s.qtd_acertos AS NUMERIC) / s.qtd_questoes * 100, 2)
                  ELSE 0 END AS desempenho,
             s.comentario,
             e.status,
