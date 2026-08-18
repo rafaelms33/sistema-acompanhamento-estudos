@@ -1,0 +1,21 @@
+# Ambiente
+.venv/
+__pycache__/
+*.pyc
+
+# Configuração e credenciais
+.env
+.streamlit/
+neon_url.txt
+
+# Bancos de dados — contêm hashes de senha reais
+*.db
+*.db-journal
+trilha_tjs_ajaa.db
+estudos_concursos.db
+
+# Dump de produção — contém hashes de senha reais
+producao.json
+
+# Logs
+*.log
