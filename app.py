@@ -51,11 +51,18 @@ DATABASE_URL = config_valor("DATABASE_URL")
 DB_BACKEND = "postgresql" if DATABASE_URL else "sqlite"
 IS_PRODUCTION = APP_ENV == "production"
 DEBUG = config_valor("DEBUG", "0") == "1" and not IS_PRODUCTION
-PLANILHA_REFERENCIA = Path(
-    config_valor(
-        "ESTUDOS_REFERENCIA",
-        r"C:\Users\Rafael.000\Downloads\Acompanhamento da Trilha - TJs - AJAA.xlsx",
-    )
+def _resolver_referencia(valor):
+    """
+    Caminho da planilha de referência. Um valor absoluto é usado como veio;
+    um valor relativo é resolvido a partir da pasta do app, para o código não
+    depender da máquina de ninguém.
+    """
+    caminho = Path(str(valor).strip()).expanduser()
+    return caminho if caminho.is_absolute() else (BASE_DIR / caminho)
+
+
+PLANILHA_REFERENCIA = _resolver_referencia(
+    config_valor("ESTUDOS_REFERENCIA", "Acompanhamento_da_Trilha.xlsx")
 )
 ADMIN_EMAIL = config_valor("ESTUDOS_ADMIN_EMAIL", "admin@admin.com")
 ADMIN_PASSWORD = config_valor("ESTUDOS_ADMIN_PASSWORD", "123")
@@ -149,6 +156,24 @@ CSS = """
   opacity: 1 !important;
   visibility: visible !important;
 }
+/* Título da aplicação (st.sidebar.title → h1).
+   Sem esta regra o h1 ficava com a cor padrão do Streamlit (#31333F) sobre o
+   fundo #0f172a: contraste 1.42, praticamente invisível. */
+[data-testid="stSidebar"] h1,
+[data-testid="stSidebar"] h2,
+[data-testid="stSidebar"] .stMarkdown h1,
+[data-testid="stSidebar"] .stMarkdown h2 {
+  color: #f1f5f9 !important;
+  font-size: 1.02rem !important;
+  font-weight: 800 !important;
+  line-height: 1.3 !important;
+  padding: 0 !important;
+  margin: .2rem 0 .8rem !important;
+}
+[data-testid="stSidebar"] h4,
+[data-testid="stSidebar"] h5,
+[data-testid="stSidebar"] h6 { color: #e2e8f0 !important; }
+
 /* Títulos de seção na sidebar */
 [data-testid="stSidebar"] h3,
 [data-testid="stSidebar"] .stMarkdown h3 {
@@ -182,13 +207,45 @@ CSS = """
   color: #f1f5f9 !important;
 }
 [data-testid="stSidebar"] .stRadio label[data-testid="stWidgetLabel"] { display: none !important; }
-/* Oculta o círculo padrão do radio e usa highlight de fundo */
-[data-testid="stSidebar"] .stRadio input[type="radio"] { display: none !important; }
-[data-testid="stSidebar"] .stRadio input[type="radio"]:checked + div + label,
-[data-testid="stSidebar"] .stRadio input[type="radio"]:checked ~ label {
+
+/* Item ativo do menu.
+   O Streamlit marca a opção selecionada com data-selected="true" em
+   stRadioOption. Os seletores antigos (input:checked ~ label) não existem
+   nessa árvore, então o item ativo não recebia destaque nenhum. */
+[data-testid="stSidebar"] [data-testid="stRadioOption"] {
+  border-radius: 8px !important;
+  padding: 2px 6px !important;
+  margin: 1px 0 !important;
+}
+[data-testid="stSidebar"] [data-testid="stRadioOption"] p {
+  color: #cbd5e1 !important;
+  font-size: .85rem !important;
+  font-weight: 500 !important;
+}
+[data-testid="stSidebar"] [data-testid="stRadioOption"]:hover {
+  background: rgba(255,255,255,.08) !important;
+}
+[data-testid="stSidebar"] [data-testid="stRadioOption"][data-selected="true"] {
   background: rgba(59,130,246,.25) !important;
-  color: #93c5fd !important;
+}
+[data-testid="stSidebar"] [data-testid="stRadioOption"][data-selected="true"] p {
+  color: #bfdbfe !important;
   font-weight: 700 !important;
+}
+
+/* Chips do multiselect: o tema do Streamlit pinta o fundo de vermelho (#ff4b4b)
+   e a regra genérica de span acima deixava o texto cinza-claro em cima —
+   contraste 2.22. Fundo azul do tema e texto branco. */
+[data-testid="stSidebar"] [data-testid="stMultiSelectTagsContainer"] span[data-tag] {
+  background: #2563eb !important;
+  border-radius: 6px !important;
+}
+[data-testid="stSidebar"] [data-testid="stMultiSelectTagsContainer"] span[data-tag] span,
+[data-testid="stSidebar"] [data-testid="stMultiSelectTagsContainer"] span[data-tag] {
+  color: #ffffff !important;
+}
+[data-testid="stSidebar"] [data-testid="stMultiSelectTagsContainer"] span[data-tag] svg {
+  fill: #ffffff !important;
 }
 /* Botões da sidebar */
 [data-testid="stSidebar"] .stButton > button {
@@ -224,6 +281,26 @@ CSS = """
   background: rgba(255,255,255,.07) !important;
   border-color: rgba(255,255,255,.15) !important;
   color: #e2e8f0 !important;
+}
+/* Valor selecionado do selectbox/multiselect.
+   No Streamlit atual isso é o value de um <input> dentro de react-aria-ComboBox,
+   não um nó de texto — as regras de `span`/`p`/`> div > div` não o alcançavam e
+   ele ficava com a cor escura padrão sobre o fundo escuro da sidebar. */
+[data-testid="stSidebar"] input {
+  color: #e2e8f0 !important;
+  -webkit-text-fill-color: #e2e8f0 !important;
+  opacity: 1 !important;
+}
+[data-testid="stSidebar"] input::placeholder {
+  color: #94a3b8 !important;
+  -webkit-text-fill-color: #94a3b8 !important;
+  opacity: 1 !important;
+}
+/* Ícones (seta do selectbox, calendário, limpar) */
+[data-testid="stSidebar"] [data-testid="stSelectbox"] svg,
+[data-testid="stSidebar"] [data-testid="stMultiSelect"] svg,
+[data-testid="stSidebar"] [data-testid="stDateInput"] svg {
+  fill: #cbd5e1 !important;
 }
 /* Cabeçalho do usuário na sidebar */
 .sidebar-user {
@@ -1085,6 +1162,8 @@ def limpar_cache():
     carregar_assuntos.clear()
     carregar_tarefas_base.clear()
     carregar_sessoes_dashboard.clear()
+    carregar_sessoes.clear()
+    carregar_sessoes_aluno.clear()
 
 
 # ─────────────────────────────────────────────
@@ -1239,6 +1318,19 @@ def _recalcular_execucao_por_sessoes(conn, aluno_id: int, tarefa_id: int) -> Non
     qtd_questoes_feitas, qtd_acertos e desempenho em execucoes.
     Preserva status, tipo_estudo, data_execucao (usa a data da sessão mais recente).
     """
+    # Garante que a linha de execução existe antes de atualizar.
+    # Sem isto, uma tarefa importada e ainda não vinculada ao aluno recebia a
+    # sessão em sessoes_estudo e o UPDATE abaixo afetava ZERO linhas: as horas
+    # ficavam órfãs, sem erro nenhum e com mensagem de sucesso na tela.
+    conn.execute(
+        """
+        INSERT INTO execucoes (aluno_id, tarefa_id, status, concluida)
+        VALUES (?, ?, 'NAO_INICIADA', 0)
+        ON CONFLICT(aluno_id, tarefa_id) DO NOTHING
+        """,
+        (int(aluno_id), int(tarefa_id)),
+    )
+
     row = conn.execute(
         """
         SELECT
@@ -1423,6 +1515,27 @@ def importar_planilha_referencia(caminho=PLANILHA_REFERENCIA, substituir=False):
             # Tarefas que já têm execução (qualquer status) são ignoradas.
             # Isso garante que o dashboard enxergue as novas tarefas
             # sem afetar nenhum registro existente.
+            # ── Realinha o tipo de estudo das tarefas AINDA NÃO INICIADAS ──
+            # Só toca em quem tem status NAO_INICIADA e nenhuma hora/questão
+            # registrada. Qualquer tarefa com estudo lançado fica intacta:
+            # o tipo escolhido pelo aluno na hora de estudar é preservado.
+            conn.execute(
+                """
+                UPDATE execucoes SET tipo_estudo = (
+                    SELECT COALESCE(t.tipo, 'Outro') FROM tarefas t
+                    WHERE t.id = execucoes.tarefa_id
+                )
+                WHERE status = 'NAO_INICIADA'
+                  AND COALESCE(ch_efetiva, 0) = 0
+                  AND COALESCE(qtd_questoes_feitas, 0) = 0
+                  AND NOT EXISTS (
+                      SELECT 1 FROM sessoes_estudo s
+                      WHERE s.aluno_id = execucoes.aluno_id
+                        AND s.tarefa_id = execucoes.tarefa_id
+                  )
+                """
+            )
+
             alunos_ativos_ids = [
                 row[0] for row in conn.execute(
                     "SELECT id FROM alunos WHERE ativo = 1 AND perfil = 'Aluno'"
@@ -1431,8 +1544,8 @@ def importar_planilha_referencia(caminho=PLANILHA_REFERENCIA, substituir=False):
             if alunos_ativos_ids:
                 conn.execute(
                     """
-                    INSERT INTO execucoes (aluno_id, tarefa_id, status, concluida)
-                    SELECT a.id, t.id, 'NAO_INICIADA', 0
+                    INSERT INTO execucoes (aluno_id, tarefa_id, status, concluida, tipo_estudo)
+                    SELECT a.id, t.id, 'NAO_INICIADA', 0, COALESCE(t.tipo, 'Outro')
                     FROM tarefas t
                     CROSS JOIN (
                         SELECT id FROM alunos WHERE ativo = 1 AND perfil = 'Aluno'
@@ -1466,8 +1579,8 @@ def vincular_tarefas_pendentes() -> int:
         antes = conn.execute("SELECT COUNT(*) FROM execucoes").fetchone()[0]
         conn.execute(
             """
-            INSERT INTO execucoes (aluno_id, tarefa_id, status, concluida)
-            SELECT a.id, t.id, 'NAO_INICIADA', 0
+            INSERT INTO execucoes (aluno_id, tarefa_id, status, concluida, tipo_estudo)
+            SELECT a.id, t.id, 'NAO_INICIADA', 0, COALESCE(t.tipo, 'Outro')
             FROM tarefas t
             CROSS JOIN (
                 SELECT id FROM alunos WHERE ativo = 1 AND perfil = 'Aluno'
@@ -1482,93 +1595,6 @@ def vincular_tarefas_pendentes() -> int:
         depois = conn.execute("SELECT COUNT(*) FROM execucoes").fetchone()[0]
     limpar_cache()
     return int(depois - antes)
-    """
-    Importador legado: lê aba CICLO_REG com um aluno por arquivo.
-    Mantido por compatibilidade com arquivos individuais.
-    """
-    caminho_excel = Path(caminho_excel)
-    if not caminho_excel.exists():
-        st.error(f"Arquivo não encontrado: {caminho_excel}")
-        return False
-    aluno_nome, data_execucao = nome_aluno_data_arquivo(caminho_excel)
-    try:
-        df = pd.read_excel(caminho_excel, sheet_name="CICLO_REG", header=2)
-    except Exception as exc:
-        erro_usuario(f"Erro ao ler {caminho_excel.name}.", exc)
-        return False
-
-    df.columns = [str(c).strip().upper() for c in df.columns]
-    if "BLOCO" not in df.columns or "DISCIPLINA" not in df.columns:
-        st.error(f"A aba CICLO_REG de {caminho_excel.name} não possui BLOCO/DISCIPLINA.")
-        return False
-    df["BLOCO"] = df["BLOCO"].ffill()
-    df = df[df["DISCIPLINA"].notna()].copy()
-    aliases = {
-        "matematica e raciocinio logico": "matematica e raciocinio logico",
-        "administracao geral e publica": "administracao geral e publica e gestao de pessoas",
-        "administracao financeira e orcamentaria": "administracao financeira e orcamentaria",
-    }
-
-    try:
-        with conectar() as conn:
-            conn.execute(
-                """
-                INSERT INTO alunos (nome, email, senha, perfil, ativo, force_troca_senha)
-                VALUES (?, ?, ?, 'Aluno', 1, 1)
-                ON CONFLICT(nome) DO UPDATE SET email = excluded.email, ativo = 1
-                """,
-                (aluno_nome, email_local(aluno_nome), hash_senha("123")),
-            )
-            aluno_id = conn.execute("SELECT id FROM alunos WHERE nome = ?", (aluno_nome,)).fetchone()[0]
-            conn.execute("DELETE FROM execucoes WHERE aluno_id = ?", (aluno_id,))
-            tarefas = conn.execute(
-                """
-                SELECT t.id, COALESCE(t.trilha, 0), d.nome, COALESCE(t.qtd_exercicios_previstos, 0)
-                FROM tarefas t
-                JOIN disciplinas d ON d.id = t.disciplina_id
-                WHERE t.ativo = 1 AND d.ativo = 1
-                ORDER BY t.numero
-                """
-            ).fetchall()
-            por_chave = {}
-            for tarefa_id, trilha, disciplina, previstos in tarefas:
-                chave = aliases.get(chave_texto(disciplina), chave_texto(disciplina))
-                por_chave.setdefault((int(trilha or 0), chave), []).append((int(tarefa_id), int(previstos or 0)))
-
-            for _, row in df.iterrows():
-                bloco = limpar_texto(row.get("BLOCO"))
-                disciplina = limpar_texto(row.get("DISCIPLINA"))
-                if not bloco or not disciplina:
-                    continue
-                match = re.search(r"(\d+)", bloco)
-                if not match:
-                    continue
-                trilha = int(match.group(1))
-                chave_disc = aliases.get(chave_texto(disciplina), chave_texto(disciplina))
-                tarefas_match = por_chave.get((trilha, chave_disc), [])
-                if not tarefas_match:
-                    continue
-                ch_total = converter_horas(row.get("CH (EFETIVA)"))
-                questoes_total = converter_inteiro(row.get("TOT QUEST FEITAS"))
-                acertos_total = converter_inteiro(row.get("TOT ACERTOS"))
-                comentario = limpar_texto(row.get("AULA ATUAL"))
-                if not (ch_total > 0 or questoes_total > 0 or acertos_total > 0 or comentario):
-                    continue
-                pesos = [previstos for _, previstos in tarefas_match]
-                questoes_dist = distribuir_inteiro(questoes_total, pesos)
-                acertos_dist = distribuir_inteiro(acertos_total, questoes_dist)
-                ch_por_tarefa = ch_total / len(tarefas_match) if tarefas_match else 0
-                for idx, (tarefa_id, _) in enumerate(tarefas_match):
-                    upsert_execucao(
-                        conn, aluno_id, tarefa_id, str(data_execucao),
-                        ch_por_tarefa, None, 0, acertos_dist[idx],
-                        comentario, questoes_dist[idx], STATUS_CONCLUIDA,
-                    )
-    except Exception as exc:
-        erro_usuario(f"Importação cancelada para {caminho_excel.name}.", exc)
-        return False
-    limpar_cache()
-    return True
 
 
 def _status_ciclo_para_interno(status_planilha: str) -> str:
@@ -1723,6 +1749,10 @@ def importar_ciclo_consolidado(caminho_excel, modo: str = "substituir") -> dict:
             id_b = conn.execute("SELECT id FROM alunos WHERE nome = ?", (nome_aluno_b,)).fetchone()[0]
 
             if modo == "substituir":
+                # Apaga também as sessões: sem isso o banco ficava inconsistente —
+                # execucoes reconstruída pela planilha e sessoes_estudo intacta,
+                # até a próxima sessão registrada reescrever tudo pelo somatório antigo.
+                conn.execute("DELETE FROM sessoes_estudo WHERE aluno_id IN (?, ?)", (id_a, id_b))
                 conn.execute("DELETE FROM execucoes WHERE aluno_id IN (?, ?)", (id_a, id_b))
 
             # Carrega tarefas do banco indexadas por (trilha, chave_disciplina)
@@ -1870,7 +1900,11 @@ def carregar_visao_tarefas(aluno_id=None):
             t.seq_disciplina,
             COALESCE(a.aula, t.aula) AS aula,
             t.qtd_exercicios_previstos,
-            COALESCE(e.tipo_estudo, t.tipo, 'Outro') AS tipo,
+            CASE
+                WHEN COALESCE(e.status, 'NAO_INICIADA') = 'NAO_INICIADA'
+                    THEN COALESCE(t.tipo, 'Outro')
+                ELSE COALESCE(NULLIF(e.tipo_estudo, 'Outro'), t.tipo, 'Outro')
+            END AS tipo,
             t.conteudo,
             e.id AS execucao_id,
             e.aluno_id,
@@ -1901,6 +1935,20 @@ def carregar_visao_tarefas(aluno_id=None):
 
 @st.cache_data(ttl=20)
 def carregar_execucoes():
+    """
+    Execuções ordenadas pela data real de estudo, da mais recente para a
+    mais antiga.
+
+    A ordenação usa `ultima_atividade` = a data da sessão de estudo mais
+    recente da tarefa, com `data_execucao` como reserva para registros
+    antigos, anteriores às sessões.
+
+    Não usa `atualizado_em`: esse campo é carimbado sempre que a linha é
+    tocada, inclusive por uma importação de planilha, o que faria tarefas
+    nunca estudadas subirem para o topo da lista.
+
+    Tarefas sem nenhuma atividade vão para o fim.
+    """
     return consultar(
         """
         SELECT
@@ -1916,7 +1964,11 @@ def carregar_execucoes():
             t.aula_id,
             COALESCE(ass.titulo, t.conteudo) AS assunto,
             t.assunto_id,
-            COALESCE(e.tipo_estudo, t.tipo, 'Outro') AS tipo,
+            CASE
+                WHEN COALESCE(e.status, 'NAO_INICIADA') = 'NAO_INICIADA'
+                    THEN COALESCE(t.tipo, 'Outro')
+                ELSE COALESCE(NULLIF(e.tipo_estudo, 'Outro'), t.tipo, 'Outro')
+            END AS tipo,
             t.conteudo,
             t.qtd_exercicios_previstos,
             e.data_execucao,
@@ -1928,14 +1980,18 @@ def carregar_execucoes():
             e.desempenho,
             COALESCE(e.status, 'NAO_INICIADA') AS status,
             e.comentario,
-            e.atualizado_em
+            e.atualizado_em,
+            COALESCE((SELECT MAX(s.data_sessao) FROM sessoes_estudo s WHERE s.aluno_id = e.aluno_id AND s.tarefa_id = e.tarefa_id), e.data_execucao) AS ultima_atividade
         FROM execucoes e
         JOIN alunos al ON al.id = e.aluno_id AND al.ativo = 1 AND al.perfil = 'Aluno'
         JOIN tarefas t ON t.id = e.tarefa_id AND t.ativo = 1
         JOIN disciplinas d ON d.id = t.disciplina_id AND d.ativo = 1
         LEFT JOIN aulas a ON a.id = t.aula_id AND a.ativo = 1
         LEFT JOIN assuntos ass ON ass.id = t.assunto_id AND ass.ativo = 1
-        ORDER BY e.atualizado_em DESC, al.nome, t.numero
+        ORDER BY
+            CASE WHEN COALESCE((SELECT MAX(s.data_sessao) FROM sessoes_estudo s WHERE s.aluno_id = e.aluno_id AND s.tarefa_id = e.tarefa_id), e.data_execucao) IS NULL THEN 1 ELSE 0 END,
+            COALESCE((SELECT MAX(s.data_sessao) FROM sessoes_estudo s WHERE s.aluno_id = e.aluno_id AND s.tarefa_id = e.tarefa_id), e.data_execucao) DESC,
+            e.atualizado_em DESC, al.nome, t.numero
         """
     )
 
@@ -2149,7 +2205,7 @@ def painel_filtros(df, prefixo="dash"):
     if st.sidebar.button("Salvar filtro favorito", use_container_width=True, key=f"{prefixo}_salvar_filtro"):
         if nome_filtro:
             favoritos[nome_filtro] = {
-                "periodo": periodo, "aluno": aluno, "status": status_escolhidos,
+                "periodo": periodo, "aluno": alunos_sel, "status": status_escolhidos,
                 "disciplina": disciplina, "aula": aula, "assunto": assunto,
                 "tipo": tipo, "min_horas": minimo_horas, "recentes": recentes,
             }
@@ -2224,6 +2280,106 @@ def dias_uteis_no_periodo(inicio: date | None, fim: date | None) -> int:
     return total
 
 
+def _pares_aluno_tarefa(df: pd.DataFrame) -> set:
+    """Conjunto de pares (aluno_id, tarefa_id) presentes num DataFrame."""
+    if df is None or df.empty or not {"aluno_id", "tarefa_id"} <= set(df.columns):
+        return set()
+    d = df.dropna(subset=["aluno_id", "tarefa_id"])
+    if d.empty:
+        return set()
+    return set(zip(d["aluno_id"].astype(int), d["tarefa_id"].astype(int)))
+
+
+def _sessoes_do_escopo(df_escopo: pd.DataFrame, inicio=None, fim=None) -> pd.DataFrame:
+    """
+    Sessões de estudo restritas aos pares (aluno, tarefa) do escopo, opcionalmente
+    recortadas por período.
+
+    Por que não usar `execucoes`: lá `data_execucao` guarda a data da ÚLTIMA sessão
+    da tarefa (ver `_recalcular_execucao_por_sessoes`). Somar horas por aquela coluna
+    joga todo o esforço de uma tarefa no dia em que ela terminou — uma tarefa estudada
+    ao longo de cinco semanas aparece inteira na última. Cada sessão tem a própria
+    data, então é daqui que saem as métricas por período.
+    """
+    colunas = ["aluno_id", "tarefa_id", "data", "ch_efetiva",
+               "qtd_questoes_feitas", "qtd_acertos"]
+    try:
+        sess = carregar_sessoes_dashboard()
+    except Exception:
+        return pd.DataFrame(columns=colunas)
+    if sess is None or sess.empty:
+        return pd.DataFrame(columns=colunas)
+
+    sess = sess.copy()
+    sess["data"] = pd.to_datetime(sess["data_execucao"], errors="coerce").dt.date
+    sess = sess.dropna(subset=["data", "aluno_id", "tarefa_id"])
+
+    pares = _pares_aluno_tarefa(df_escopo)
+    if pares:
+        chaves = zip(sess["aluno_id"].astype(int), sess["tarefa_id"].astype(int))
+        sess = sess[[c in pares for c in chaves]]
+
+    if inicio:
+        sess = sess[sess["data"] >= inicio]
+    if fim:
+        sess = sess[sess["data"] <= fim]
+    sess["data_ref"] = pd.to_datetime(sess["data"], errors="coerce")
+    return sess
+
+
+# Colunas que todo agregado temporal do dashboard consome
+_COLS_TEMPORAL = [
+    "aluno_id", "aluno", "tarefa_id", "disciplina", "disciplina_id",
+    "aula", "assunto", "tipo", "status", "data_ref",
+    "ch_efetiva", "qtd_questoes_feitas", "qtd_acertos",
+]
+
+
+def _frame_temporal(sess_per: pd.DataFrame, legado_per: pd.DataFrame) -> pd.DataFrame:
+    """
+    Base para tudo que agrega HORAS ao longo do tempo: uma linha por sessão, com a
+    data em que aquele estudo aconteceu.
+
+    Não serve para contar tarefas nem status — uma tarefa estudada em cinco dias
+    vira cinco linhas aqui. Contagem de tarefas continua saindo de `analisavel`,
+    que tem uma linha por par aluno×tarefa.
+    """
+    partes = []
+    for origem in (sess_per, legado_per):
+        if origem is None or origem.empty:
+            continue
+        d = origem.copy()
+        for c in _COLS_TEMPORAL:
+            if c not in d.columns:
+                d[c] = pd.NA
+        partes.append(d[_COLS_TEMPORAL])
+    if not partes:
+        return pd.DataFrame(columns=_COLS_TEMPORAL)
+    fr = pd.concat(partes, ignore_index=True)
+    fr["data_ref"] = pd.to_datetime(fr["data_ref"], errors="coerce")
+    for c in ("ch_efetiva", "qtd_questoes_feitas", "qtd_acertos"):
+        fr[c] = pd.to_numeric(fr[c], errors="coerce").fillna(0)
+    return fr
+
+
+def _sem_sessao(df: pd.DataFrame, pares_com_sessao: set) -> pd.DataFrame:
+    """
+    Linhas cujo par (aluno, tarefa) não tem nenhuma sessão registrada — casos de
+    importação antiga, em que as horas vivem só em `execucoes`. Continuam contando
+    pela data de execução para não sumirem dos totais.
+    """
+    if df is None or df.empty:
+        return df
+    if not {"aluno_id", "tarefa_id"} <= set(df.columns):
+        return df
+    def fora(row):
+        a, t = row["aluno_id"], row["tarefa_id"]
+        if pd.isna(a) or pd.isna(t):
+            return True
+        return (int(a), int(t)) not in pares_com_sessao
+    return df[df.apply(fora, axis=1)] if not df.empty else df
+
+
 def calcular_kpis_avancados(
     df_escopo: pd.DataFrame,
     df_periodo: pd.DataFrame,
@@ -2267,35 +2423,29 @@ def calcular_kpis_avancados(
     tarefas_rest     = qtd_andamento + qtd_nao_iniciada
 
     # ── Temporais — período filtrado ──
+    # Horas, questões e acertos vêm de sessoes_estudo, onde cada linha tem a data
+    # em que o estudo aconteceu de verdade. Ver _sessoes_do_escopo.
     per_anal = df_periodo[df_periodo["status"].isin(STATUS_ANALISE)].copy()
     per_conc = per_anal[per_anal["status"] == STATUS_CONCLUIDA]
 
-    horas_total = float(per_anal["ch_efetiva"].sum())
-    questoes    = int(per_anal["qtd_questoes_feitas"].sum())
-    acertos     = int(per_anal["qtd_acertos"].sum())
+    sess_escopo = _sessoes_do_escopo(df_escopo)
+    sess_per    = _sessoes_do_escopo(df_escopo, inicio_periodo, fim_periodo)
+    pares_sess  = _pares_aluno_tarefa(sess_escopo)
+
+    legado_per = _sem_sessao(per_anal, pares_sess)
+    legado_esc = _sem_sessao(esc_anal, pares_sess)
+
+    horas_total = float(sess_per["ch_efetiva"].sum()) + float(legado_per["ch_efetiva"].sum())
+    questoes    = int(sess_per["qtd_questoes_feitas"].sum()) + int(legado_per["qtd_questoes_feitas"].sum())
+    acertos     = int(sess_per["qtd_acertos"].sum()) + int(legado_per["qtd_acertos"].sum())
     desempenho  = acertos / questoes * 100 if questoes else 0
 
-    # Dias ativos no PERÍODO: união de data_execucao + sessoes_estudo no intervalo
-    datas_periodo = set(per_anal["data_ref"].dropna().dt.date.tolist())
-    try:
-        sess_per = carregar_sessoes_dashboard()
-        if not sess_per.empty and "aluno_id" in sess_per.columns:
-            aluno_ids_per = (
-                set(df_escopo["aluno_id"].unique())
-                if "aluno_id" in df_escopo.columns else set()
-            )
-            if aluno_ids_per:
-                sess_per = sess_per[sess_per["aluno_id"].isin(aluno_ids_per)]
-        if not sess_per.empty and "data_sessao" in sess_per.columns:
-            datas_sess_per = pd.to_datetime(sess_per["data_sessao"], errors="coerce").dropna().dt.date
-            # Filtra pelo intervalo do período
-            if inicio_periodo:
-                datas_sess_per = datas_sess_per[datas_sess_per >= inicio_periodo]
-            if fim_periodo:
-                datas_sess_per = datas_sess_per[datas_sess_per <= fim_periodo]
-            datas_periodo = datas_periodo | set(datas_sess_per.tolist())
-    except Exception:
-        pass
+    # Horas de todo o escopo (sem recorte de período) — base estável para estimativas
+    horas_escopo = float(sess_escopo["ch_efetiva"].sum()) + float(legado_esc["ch_efetiva"].sum())
+
+    # Dias ativos no PERÍODO: datas das sessões + datas de execução do legado
+    datas_periodo = set(sess_per["data"].tolist())
+    datas_periodo |= set(legado_per["data_ref"].dropna().dt.date.tolist())
     dias_unicos     = sorted(datas_periodo)
     qtd_dias_ativos = len(dias_unicos)
 
@@ -2309,55 +2459,84 @@ def calcular_kpis_avancados(
         f"{dias_uteis} dia(s) útil(eis) no período"
     )
 
-    # Semana atual e anterior — sempre sobre escopo total (para insights consistentes)
-    exec_semana   = esc_anal[esc_anal["data_ref"].dt.date >= semana_ini]
-    horas_semana  = float(exec_semana["ch_efetiva"].sum())
+    # Semana atual e anterior — sempre sobre escopo total (para insights consistentes).
+    # Horas pelas sessões; conclusões pela data de execução, que é a data em que a
+    # tarefa efetivamente terminou.
+    def _horas_entre(ini, fim_ex):
+        """Horas das sessões do escopo em [ini, fim_ex)."""
+        if sess_escopo.empty:
+            base = 0.0
+        else:
+            m = (sess_escopo["data"] >= ini) & (sess_escopo["data"] < fim_ex)
+            base = float(sess_escopo.loc[m, "ch_efetiva"].sum())
+        if legado_esc is not None and not legado_esc.empty:
+            leg = legado_esc.dropna(subset=["data_ref"])
+            if not leg.empty:
+                d = leg["data_ref"].dt.date
+                base += float(leg.loc[(d >= ini) & (d < fim_ex), "ch_efetiva"].sum())
+        return base
+
+    prox_semana   = semana_ini + timedelta(days=7)
+    horas_semana  = _horas_entre(semana_ini, prox_semana)
+    horas_sem_pas = _horas_entre(semana_pas, semana_ini)
+
+    # Limite superior evita que data de execução no futuro entre como "esta semana"
+    exec_semana   = esc_anal[
+        (esc_anal["data_ref"].dt.date >= semana_ini) &
+        (esc_anal["data_ref"].dt.date < prox_semana)
+    ]
     conc_semana   = int((exec_semana["status"] == STATUS_CONCLUIDA).sum())
     exec_sem_pas  = esc_anal[
         (esc_anal["data_ref"].dt.date >= semana_pas) &
         (esc_anal["data_ref"].dt.date < semana_ini)
     ]
-    horas_sem_pas = float(exec_sem_pas["ch_efetiva"].sum())
     conc_sem_pas  = int((exec_sem_pas["status"] == STATUS_CONCLUIDA).sum())
     conc_periodo  = len(per_conc)
+
+    # Janelas móveis de 7 dias — comparação justa em qualquer dia da semana.
+    # A semana-calendário compara 1 dia de segunda contra 7 dias da semana anterior;
+    # os cards mantêm o recorte calendário, os insights usam estas janelas.
+    horas_7d     = _horas_entre(hoje - timedelta(days=6),  hoje + timedelta(days=1))
+    horas_7d_ant = _horas_entre(hoje - timedelta(days=13), hoje - timedelta(days=6))
+    delta_7d     = horas_7d - horas_7d_ant
 
     # Sequência, dias ativos e dias sem estudar
     # Fonte primária: sessoes_estudo (tarefas EM_ANDAMENTO ou CONCLUIDAS)
     # Fallback: data_execucao de esc_anal
     # dias_sem_estudar nunca negativo (datas futuras → max 0)
-    datas_execucao = set(esc_anal["data_ref"].dropna().dt.date.tolist())
-
-    try:
-        sess_df = carregar_sessoes_dashboard()
-        if not sess_df.empty and "aluno_id" in sess_df.columns:
-            aluno_ids_escopo = (
-                set(df_escopo["aluno_id"].unique())
-                if "aluno_id" in df_escopo.columns else set()
-            )
-            if aluno_ids_escopo:
-                sess_df = sess_df[sess_df["aluno_id"].isin(aluno_ids_escopo)]
-        if not sess_df.empty and "data_sessao" in sess_df.columns:
-            datas_sessoes = set(
-                pd.to_datetime(sess_df["data_sessao"], errors="coerce")
-                .dropna().dt.date.tolist()
-            )
-            datas_execucao = datas_execucao | datas_sessoes
-    except Exception:
-        pass
+    datas_execucao = set(sess_escopo["data"].tolist())
+    datas_execucao |= set(esc_anal["data_ref"].dropna().dt.date.tolist())
 
     todas_datas = sorted(datas_execucao)
+    conjunto_datas = set(todas_datas)
     # qtd_dias_ativos já calculado acima com base no período
 
+    # A sequência conta a partir do ÚLTIMO dia com registro, não de hoje.
+    # Contar de hoje zerava o valor toda manhã antes da primeira sessão do dia:
+    # numa segunda-feira, cinco dias seguidos de estudo apareciam como "0 dias".
     sequencia = 0
     if todas_datas:
-        d = hoje
-        while d in todas_datas:
+        d = max(todas_datas)
+        while d in conjunto_datas:
             sequencia += 1
             d -= timedelta(days=1)
 
+    sequencia_ativa = bool(todas_datas) and (hoje - max(todas_datas)).days <= 1
     dias_sem_estudar = max(0, (hoje - max(todas_datas)).days) if todas_datas else 0
 
-    produtividade = qtd_concluidas / horas_total if horas_total else 0
+    # Dias ÚTEIS sem estudar: sexta → segunda são 3 dias corridos, mas só 1 útil.
+    # O alerta de pausa usa este valor para não disparar por causa do fim de semana.
+    if todas_datas and dias_sem_estudar > 0:
+        dias_uteis_sem_estudar = dias_uteis_no_periodo(
+            max(todas_datas) + timedelta(days=1), hoje
+        )
+    else:
+        dias_uteis_sem_estudar = 0
+
+    # Numerador e denominador precisam vir do MESMO recorte. Usar as concluídas do
+    # escopo (sem período) contra as horas do período dava 7,99 tarefas/hora num
+    # filtro de 7 dias, contra 0,78 reais.
+    produtividade = conc_periodo / horas_total if horas_total else 0
 
     # Previsão — ritmo baseado no período, restantes baseados no escopo
     previsao      = None
@@ -2366,8 +2545,17 @@ def calcular_kpis_avancados(
     conc_com_data = per_conc.dropna(subset=["data_ref"]).copy()
     if not conc_com_data.empty:
         conc_com_data["semana"] = conc_com_data["data_ref"].dt.to_period("W")
-        por_semana    = conc_com_data.groupby("semana").size()
-        ultimas       = por_semana.tail(8)
+        por_semana = conc_com_data.groupby("semana").size()
+        # O groupby só devolve semanas que TIVERAM conclusão. Sem reindexar sobre o
+        # calendário, as semanas paradas somem da média e o ritmo fica otimista —
+        # 50% acima do real numa aluna, 88% na outra.
+        fim_serie = fim_periodo or hoje
+        inicio_serie = conc_com_data["data_ref"].min().date()
+        calendario = pd.period_range(
+            start=inicio_serie, end=max(fim_serie, inicio_serie), freq="W"
+        )
+        por_semana = por_semana.reindex(calendario, fill_value=0)
+        ultimas = por_semana.tail(8)
         if len(ultimas) >= 1:
             ritmo_semanal = float(ultimas.mean())
 
@@ -2384,11 +2572,23 @@ def calcular_kpis_avancados(
     else:
         previsao_base = "Dados insuficientes: sem tarefas concluídas com data no período selecionado."
 
-    media_h_tarefa  = horas_total / qtd_concluidas if qtd_concluidas else 0
+    # Custo médio por tarefa: horas e conclusões do mesmo recorte. Quando o período
+    # não tem conclusões, cai para o histórico inteiro do escopo — caso contrário a
+    # estimativa de esforço restante zeraria e leria como "não falta nada".
+    if conc_periodo:
+        media_h_tarefa = horas_total / conc_periodo
+    elif qtd_concluidas:
+        media_h_tarefa = horas_escopo / qtd_concluidas
+    else:
+        media_h_tarefa = 0
     horas_restantes = tarefas_rest * media_h_tarefa
+
+    media_por_dia_ativo = horas_total / qtd_dias_ativos if qtd_dias_ativos else 0.0
 
     return {
         "analisavel":           per_anal,
+        "temporal":             _frame_temporal(sess_per, legado_per),
+        "temporal_escopo":      _frame_temporal(sess_escopo, legado_esc),
         "concluidas_df":        per_conc,
         "andamento_df":         esc_and,
         "escopo_analisavel":    esc_anal,
@@ -2399,10 +2599,14 @@ def calcular_kpis_avancados(
         "pct_conclusao":        pct_conclusao,
         "tarefas_restantes":    tarefas_rest,
         "horas_total":          horas_total,
+        "horas_escopo":         horas_escopo,
         "conc_periodo":         conc_periodo,
         "horas_semana":         horas_semana,
         "horas_sem_pas":        horas_sem_pas,
         "delta_horas_semana":   horas_semana - horas_sem_pas,
+        "horas_7d":             horas_7d,
+        "horas_7d_ant":         horas_7d_ant,
+        "delta_7d":             delta_7d,
         "conc_semana":          conc_semana,
         "conc_sem_pas":         conc_sem_pas,
         "delta_conc_semana":    conc_semana - conc_sem_pas,
@@ -2413,8 +2617,11 @@ def calcular_kpis_avancados(
         "dias_uteis":           dias_uteis,
         "media_diaria":         media_diaria,
         "media_diaria_label":   media_diaria_label,
+        "media_por_dia_ativo":  media_por_dia_ativo,
         "sequencia":            sequencia,
+        "sequencia_ativa":      sequencia_ativa,
         "dias_sem_estudar":     dias_sem_estudar,
+        "dias_uteis_sem_estudar": dias_uteis_sem_estudar,
         "produtividade":        produtividade,
         "ritmo_semanal":        ritmo_semanal,
         "previsao_conclusao":   previsao,
@@ -2447,26 +2654,32 @@ def gerar_insights(df: pd.DataFrame, kpis: dict, nome_aluno: str = "") -> list:
     if ana.empty:
         return [{"tipo":"info","icone":"📭","titulo":"Sem dados suficientes","texto":"Registre atividades para obter análise personalizada."}]
 
-    # Tendência de horas
-    dh = kpis["delta_horas_semana"]
-    hs = kpis["horas_semana"]; hsp = kpis["horas_sem_pas"]
-    if hsp > 0:
-        pct_d = dh / hsp * 100
+    # Tendência de horas — janelas móveis de 7 dias.
+    # A semana-calendário comparava 1 dia de segunda contra 7 da semana anterior,
+    # então "estudou 100% menos esta semana" disparava toda segunda de manhã.
+    h7  = kpis.get("horas_7d", 0.0)
+    h7a = kpis.get("horas_7d_ant", 0.0)
+    if h7a > 0:
+        pct_d = (h7 - h7a) / h7a * 100
         if pct_d < -20:
-            insights.append({"tipo":"warning","icone":"📉","titulo":"Queda de produtividade",
-                "texto":f"{nome} estudou {abs(pct_d):.0f}% menos esta semana ({horas_para_hm(hs)}) vs semana anterior ({horas_para_hm(hsp)})."})
+            insights.append({"dim":"tendencia","tipo":"warning","icone":"📉","titulo":"Queda de ritmo",
+                "texto":f"{nome} estudou {abs(pct_d):.0f}% menos nos últimos 7 dias ({horas_para_hm(h7)}) que nos 7 anteriores ({horas_para_hm(h7a)})."})
         elif pct_d > 20:
-            insights.append({"tipo":"success","icone":"📈","titulo":"Semana mais produtiva",
-                "texto":f"{nome} aumentou {pct_d:.0f}% as horas esta semana ({hs:.1f}h vs {hsp:.1f}h). Excelente ritmo!"})
+            insights.append({"dim":"tendencia","tipo":"success","icone":"📈","titulo":"Ritmo em alta",
+                "texto":f"{nome} aumentou {pct_d:.0f}% as horas nos últimos 7 dias ({horas_para_hm(h7)} vs {horas_para_hm(h7a)}). Excelente ritmo!"})
 
     # Sequência
-    seq = kpis["sequencia"]
-    if seq >= 7:
-        insights.append({"tipo":"success","icone":"🔥","titulo":f"Sequência de {seq} dias!",
+    seq  = kpis["sequencia"]
+    viva = kpis.get("sequencia_ativa", True)
+    dsu  = kpis.get("dias_uteis_sem_estudar", kpis["dias_sem_estudar"])
+    if seq >= 7 and viva:
+        insights.append({"dim":"sequencia","tipo":"success","icone":"🔥","titulo":f"Sequência de {seq} dias!",
             "texto":f"{nome} está estudando há {seq} dias consecutivos. Consistência é fundamental para aprovação."})
-    elif seq == 0 and kpis["dias_sem_estudar"] >= 3:
-        insights.append({"tipo":"warning","icone":"⏰","titulo":"Dias sem estudar",
-            "texto":f"{nome} não registra atividade há {kpis['dias_sem_estudar']} dias. Retome a rotina para não perder o ritmo."})
+    elif dsu >= 3:
+        # dias ÚTEIS: sexta → segunda não conta como pausa
+        insights.append({"dim":"sequencia","tipo":"warning","icone":"⏰","titulo":"Dias sem estudar",
+            "texto":f"{nome} não registra atividade há {dsu} dia(s) útil(eis) "
+                    f"({kpis['dias_sem_estudar']} dias corridos). Retome a rotina para não perder o ritmo."})
 
     # Disciplinas
     if "disciplina" in ana.columns and len(ana["disciplina"].unique()) > 1:
@@ -2477,72 +2690,157 @@ def gerar_insights(df: pd.DataFrame, kpis: dict, nome_aluno: str = "") -> list:
         disc_agg["desempenho"] = disc_agg.apply(lambda r: r["acertos"]/r["questoes"]*100 if r["questoes"] else 0, axis=1)
         disc_agg["pct_conc"]   = disc_agg.apply(lambda r: r["concluidas"]/r["tarefas"]*100 if r["tarefas"] else 0, axis=1)
 
+        # Denominador do progresso: TODAS as tarefas da disciplina, não só as
+        # iniciadas. Sobre as iniciadas, 10 de 10 em Informática dava "100%
+        # concluído" numa disciplina de 55 tarefas — 18% de verdade.
+        if "disciplina" in df.columns:
+            total_disc = df.groupby("disciplina")["tarefa_id"].count()
+            disc_agg["tarefas_disciplina"] = (
+                disc_agg["disciplina"].map(total_disc).fillna(disc_agg["tarefas"])
+            )
+        else:
+            disc_agg["tarefas_disciplina"] = disc_agg["tarefas"]
+        disc_agg["pct_conc"] = disc_agg.apply(
+            lambda r: r["concluidas"] / r["tarefas_disciplina"] * 100
+            if r["tarefas_disciplina"] else 0, axis=1)
+
         criticas = disc_agg[(disc_agg["questoes"]>0) & (disc_agg["desempenho"]<60)].sort_values("desempenho")
         for _, r in criticas.head(2).iterrows():
-            insights.append({"tipo":"danger","icone":"🚨","titulo":f"Atenção: {r['disciplina']}",
+            insights.append({"dim":f"desempenho:{r['disciplina']}","tipo":"danger","icone":"🚨","titulo":f"Atenção: {r['disciplina']}",
                 "texto":f"Desempenho de {r['desempenho']:.1f}% em {r['disciplina']} abaixo de 60%. Dedique sessões de revisão e questões comentadas."})
 
         total_h = disc_agg["horas"].sum()
         if total_h > 0:
-            neg = disc_agg[(disc_agg["horas"]/total_h < 0.05) & (disc_agg["tarefas"]>0)]
+            # horas > 0: disciplina sem nenhuma hora no período não é "negligenciada",
+            # só não foi tocada — num filtro de 7 dias isso vale para quase todas.
+            neg = disc_agg[(disc_agg["horas"] > 0) &
+                           (disc_agg["horas"]/total_h < 0.05) &
+                           (disc_agg["tarefas"] > 0)]
             for _, r in neg.head(2).iterrows():
-                insights.append({"tipo":"warning","icone":"📌","titulo":f"Disciplina negligenciada: {r['disciplina']}",
+                insights.append({"dim":f"tempo:{r['disciplina']}","tipo":"warning","icone":"📌","titulo":f"Disciplina negligenciada: {r['disciplina']}",
                     "texto":f"Apenas {horas_para_hm(r['horas'])} em {r['disciplina']} (<5% do tempo). Reequilibre a distribuição."})
 
         avancadas = disc_agg[disc_agg["pct_conc"]>=80].sort_values("pct_conc", ascending=False)
         if not avancadas.empty:
-            nomes = ", ".join(avancadas.head(3)["disciplina"].tolist())
-            insights.append({"tipo":"success","icone":"🏆","titulo":"Disciplinas avançadas",
+            nomes = ", ".join(
+                f"{r['disciplina']} ({r['pct_conc']:.0f}%)"
+                for _, r in avancadas.head(3).iterrows()
+            )
+            insights.append({"dim":"progresso","tipo":"success","icone":"🏆","titulo":"Disciplinas avançadas",
                 "texto":f"Ótimo progresso em: {nomes}. Continue com revisões."})
+
+        # Onde o esforço já começou mas o avanço na disciplina ainda é pequeno
+        atrasadas = disc_agg[(disc_agg["tarefas"] >= 3) & (disc_agg["pct_conc"] < 25)] \
+            .sort_values("pct_conc")
+        for _, r in atrasadas.head(2).iterrows():
+            insights.append({"dim":f"progresso:{r['disciplina']}","tipo":"info","icone":"📊",
+                "titulo":f"Avanço inicial: {r['disciplina']}",
+                "texto":f"{int(r['concluidas'])} de {int(r['tarefas_disciplina'])} tarefas concluídas "
+                        f"({r['pct_conc']:.0f}%) em {r['disciplina']}, com {int(r['tarefas'])} já iniciadas."})
 
     # Risco de atraso
     prev = kpis.get("previsao_conclusao")
     if prev and kpis["tarefas_restantes"] > 0:
         dias_p = (prev - date.today()).days
+        ritmo = kpis.get("ritmo_semanal", 0)
+        base_ritmo = f" Ritmo considerado: {ritmo:.1f} tarefa(s)/semana." if ritmo else ""
         if dias_p > 365:
-            insights.append({"tipo":"danger","icone":"⚠️","titulo":"Risco de atraso alto",
-                "texto":f"No ritmo atual, conclusão estimada em {prev.strftime('%d/%m/%Y')} ({dias_p} dias). Considere aumentar a carga semanal."})
+            insights.append({"dim":"previsao","tipo":"danger","icone":"⚠️","titulo":"Risco de atraso alto",
+                "texto":f"No ritmo atual, conclusão estimada em {prev.strftime('%d/%m/%Y')} ({dias_p} dias).{base_ritmo} Considere aumentar a carga semanal."})
         elif dias_p > 180:
-            insights.append({"tipo":"warning","icone":"📅","titulo":"Previsão de conclusão",
-                "texto":f"Estimativa: {prev.strftime('%d/%m/%Y')} ({dias_p} dias). Mantenha o ritmo."})
+            insights.append({"dim":"previsao","tipo":"warning","icone":"📅","titulo":"Previsão de conclusão",
+                "texto":f"Estimativa: {prev.strftime('%d/%m/%Y')} ({dias_p} dias).{base_ritmo} Mantenha o ritmo."})
 
-    # Produtividade
+    # Produtividade — concluídas e horas do MESMO recorte de período
     prod = kpis["produtividade"]
     if prod >= 1.5:
-        insights.append({"tipo":"success","icone":"⚡","titulo":"Alta produtividade",
-            "texto":f"{prod:.2f} tarefas/hora — excelente eficiência."})
+        insights.append({"dim":"produtividade","tipo":"success","icone":"⚡","titulo":"Alta produtividade",
+            "texto":f"{prod:.2f} tarefas concluídas por hora estudada no período — excelente eficiência."})
     elif 0 < prod < 0.3:
-        insights.append({"tipo":"info","icone":"🕐","titulo":"Sessões longas, pouco avanço",
-            "texto":f"Produtividade de {prod:.2f} tarefas/hora. Experimente sessões mais curtas com foco (técnica Pomodoro)."})
+        insights.append({"dim":"produtividade","tipo":"info","icone":"🕐","titulo":"Sessões longas, pouco avanço",
+            "texto":f"{prod:.2f} tarefas concluídas por hora estudada no período. Experimente sessões mais curtas com foco (técnica Pomodoro)."})
 
-    # Consistência
-    md = kpis["media_diaria"]
-    if md >= 4:
-        insights.append({"tipo":"success","icone":"📚","titulo":"Consistência acima da média",
-            "texto":f"Média de {md:.1f}h/dia ativo — ritmo sólido para aprovação."})
-    elif 0 < md < 1:
-        insights.append({"tipo":"warning","icone":"⏱️","titulo":"Carga diária baixa",
-            "texto":f"Média de {md:.1f}h/dia ativo. Para concursos competitivos, recomenda-se ≥4h/dia."})
+    # Consistência — horas por dia EM QUE HOUVE ESTUDO.
+    # O card "Média diária" divide por dias úteis do período e é outra medida;
+    # aqui o texto fala em "dia ativo", então o número tem que ser o de dia ativo.
+    mda = kpis.get("media_por_dia_ativo", 0.0)
+    if mda >= 4:
+        insights.append({"dim":"consistencia","tipo":"success","icone":"📚","titulo":"Sessões longas e produtivas",
+            "texto":f"Média de {horas_para_hm(mda)} nos dias em que estuda — ritmo sólido."})
+    elif 0 < mda < 1:
+        insights.append({"dim":"consistencia","tipo":"warning","icone":"⏱️","titulo":"Sessões curtas",
+            "texto":f"Média de {horas_para_hm(mda)} nos dias em que estuda. Para concursos competitivos, recomenda-se ≥4h por dia de estudo."})
+
+    # Frequência — quantos dias úteis do período tiveram estudo
+    du, dat = kpis.get("dias_uteis", 0), kpis.get("qtd_dias_ativos", 0)
+    if du >= 10 and dat > 0:
+        freq = dat / du * 100
+        if freq < 40:
+            insights.append({"dim":"frequencia","tipo":"warning","icone":"📆","titulo":"Frequência baixa",
+                "texto":f"{dat} dia(s) com estudo em {du} dias úteis do período ({freq:.0f}%). "
+                        f"A carga por sessão está boa; falta regularidade."})
 
     if not insights:
-        insights.append({"tipo":"info","icone":"✅","titulo":"Estudos em dia",
+        insights.append({"dim":"geral","tipo":"info","icone":"✅","titulo":"Estudos em dia",
             "texto":f"{nome} não apresenta alertas críticos. Continue monitorando o progresso."})
-    return insights
+
+    return _resolver_conflitos(insights)
+
+
+_PESO_INSIGHT = {"danger": 3, "warning": 2, "info": 1, "success": 0}
+
+
+def _resolver_conflitos(insights: list) -> list:
+    """
+    Impede que a mesma dimensão apareça ao mesmo tempo como sucesso e como alerta.
+    Mantém o item mais severo de cada dimensão e devolve a lista ordenada por
+    severidade, para o que exige ação ficar no topo.
+    """
+    por_dim = {}
+    for i, ins in enumerate(insights):
+        dim = ins.get("dim") or f"_{i}"
+        atual = por_dim.get(dim)
+        if atual is None or _PESO_INSIGHT.get(ins["tipo"], 0) > _PESO_INSIGHT.get(atual["tipo"], 0):
+            por_dim[dim] = ins
+    ordenados = sorted(
+        por_dim.values(),
+        key=lambda x: -_PESO_INSIGHT.get(x["tipo"], 0),
+    )
+    return ordenados
 
 
 def fig_layout(fig, height=320):
-    """Aplica estilo visual padrão a qualquer figura Plotly."""
+    """
+    Estilo visual padrão de qualquer figura Plotly.
+
+    A legenda fica ACIMA da área de plotagem. Antes ficava em y=-0.35 com margem
+    inferior de 10px: como a margem não reservava espaço, a legenda era desenhada
+    por cima das barras e dos rótulos do eixo x. Com um traço só ela é escondida,
+    porque o título já diz o que está sendo mostrado.
+    """
+    n_series = len([tr for tr in fig.data if getattr(tr, "showlegend", None) is not False])
+    com_legenda = n_series > 1
+
     fig.update_layout(
-        legend_title_text="Legenda",
-        margin=dict(l=10, r=10, t=46, b=10),
+        showlegend=com_legenda,
+        margin=dict(l=12, r=18, t=76 if com_legenda else 52, b=12),
         height=height,
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
-        font=dict(color="#0f172a", family="Inter, sans-serif"),
-        legend=dict(orientation="h", yanchor="bottom", y=-0.35, xanchor="center", x=0.5),
+        font=dict(color="#0f172a", family="Inter, sans-serif", size=12),
+        title=dict(font=dict(size=14.5, color="#0f172a"),
+                   x=0, xanchor="left", y=0.98, yanchor="top"),
+        legend=dict(orientation="h", yanchor="bottom", y=1.0,
+                    xanchor="right", x=1, title_text="",
+                    font=dict(size=11), bgcolor="rgba(0,0,0,0)"),
+        hoverlabel=dict(bgcolor="white", font_size=12, bordercolor="#e2e8f0"),
+        bargap=0.28,
     )
-    fig.update_xaxes(showgrid=False, linecolor="#e2e8f0", tickfont=dict(size=10))
-    fig.update_yaxes(showgrid=True, gridcolor="#f1f5f9", linecolor="rgba(0,0,0,0)", tickfont=dict(size=10))
+    # automargin evita que rótulo longo de eixo seja cortado
+    fig.update_xaxes(showgrid=False, linecolor="#e2e8f0", tickfont=dict(size=10),
+                     automargin=True)
+    fig.update_yaxes(showgrid=True, gridcolor="#f1f5f9", linecolor="rgba(0,0,0,0)",
+                     tickfont=dict(size=10), automargin=True, zeroline=False)
     return fig
 
 
@@ -2794,7 +3092,7 @@ def _render_kpis_desempenho(kpis: dict):
             f"de {total} tarefas no período filtrado",
             tooltip=(
                 "Quantidade de tarefas com status CONCLUIDA dentro do período e filtros selecionados. "
-                f"Fórmula: contagem de execuções com status=CONCLUIDA. "
+                "Fórmula: contagem de execuções com status=CONCLUIDA. "
                 "Filtros ativos: aluno, disciplina, tipo, período de datas."
             ),
         ),
@@ -2813,7 +3111,7 @@ def _render_kpis_desempenho(kpis: dict):
             render_html(card)
 
 
-def _aba_visao_geral(df_filtrado, analisavel):
+def _aba_visao_geral(df_filtrado, analisavel, temporal=None):
     status_df = df_filtrado.groupby("status", as_index=False)["tarefa_id"].count().rename(columns={"tarefa_id":"qtd"})
     status_df["label"] = status_df["status"].map(STATUS_LABELS)
     col_a, col_b = st.columns(2)
@@ -2831,33 +3129,59 @@ def _aba_visao_geral(df_filtrado, analisavel):
         st.plotly_chart(fig_layout(fig, 300), use_container_width=True)
     with col_b:
         if not analisavel.empty and "aluno" in analisavel.columns:
-            pa = analisavel.groupby("aluno", as_index=False).agg(
-                horas=("ch_efetiva","sum"), concluidas=("status", lambda s:(s==STATUS_CONCLUIDA).sum())
-            ).sort_values("horas", ascending=True)
+            # horas pelas sessões, conclusões pelas execuções
+            base_pa = temporal if temporal is not None and not temporal.empty else analisavel
+            pa = base_pa.groupby("aluno", as_index=False).agg(horas=("ch_efetiva","sum"))
+            pa = pa.merge(
+                analisavel.groupby("aluno", as_index=False).agg(
+                    concluidas=("status", lambda s:(s==STATUS_CONCLUIDA).sum())),
+                on="aluno", how="outer",
+            ).fillna(0).sort_values("horas", ascending=True)
             render_html(_tooltip_grafico(
-                "Barras horizontais agrupadas comparando horas estudadas e tarefas concluídas por aluno. "
-                "Ideal para identificar quem está mais ativo e quem está concluindo mais atividades."
+                "Horas estudadas por aluno. O rótulo de cada barra traz também quantas "
+                "tarefas ele concluiu nesse tempo e quantas horas custou cada conclusão — "
+                "quanto menor esse número, mais tarefas por hora de estudo."
             ))
-            fig = go.Figure()
-            fig.add_trace(go.Bar(name="Horas", y=pa["aluno"], x=pa["horas"], orientation="h", marker_color="#3b82f6"))
-            fig.add_trace(go.Bar(name="Concluídas", y=pa["aluno"], x=pa["concluidas"], orientation="h", marker_color="#22c55e"))
-            fig.update_layout(title="Horas × Conclusões por aluno", barmode="group")
-            st.plotly_chart(fig_layout(fig, 300), use_container_width=True)
+            # Um eixo só, uma unidade só. Horas e contagem de tarefas em escalas
+            # sobrepostas eram ilegíveis: os rótulos "41" e "104h" caíam no mesmo
+            # ponto e as barras não tinham base de comparação.
+            pa["h_por_tarefa"] = pa.apply(
+                lambda r: r["horas"] / r["concluidas"] if r["concluidas"] else 0, axis=1)
+            rotulos = [
+                f"{horas_para_hm(h)} · {int(c)} concluída(s)"
+                + (f" · {horas_para_hm(hp)}/tarefa" if c else "")
+                for h, c, hp in zip(pa["horas"], pa["concluidas"], pa["h_por_tarefa"])
+            ]
+            fig = go.Figure(go.Bar(
+                y=pa["aluno"], x=pa["horas"], orientation="h",
+                marker_color="#3b82f6",
+                text=rotulos, textposition="outside",
+                textfont=dict(size=11),
+                hovertemplate="%{y}<br>%{x:.2f} horas<extra></extra>",
+            ))
+            fig.update_layout(
+                title="Horas estudadas e tarefas concluídas por aluno",
+                xaxis=dict(title="Horas", rangemode="tozero"),
+            )
+            # espaço à direita para o rótulo não sair do gráfico
+            fig.update_xaxes(range=[0, float(pa["horas"].max()) * 1.75])
+            st.plotly_chart(fig_layout(fig, max(220, len(pa) * 90)), use_container_width=True)
         else:
             st.plotly_chart(grafico_vazio("Sem atividades para comparação."), use_container_width=True)
 
 
-def _aba_disciplinas(analisavel, df_total=None):
+def _aba_disciplinas(analisavel, df_total=None, temporal=None):
     """
-    df_total = df filtrado completo (todos os status).
-    analisavel = apenas Em andamento + Concluídas (para horas/questões/acertos).
-    Progresso usa df_total para incluir tarefas Não iniciadas no denominador.
+    df_total   = df filtrado completo (todos os status) → denominador do progresso.
+    analisavel = Em andamento + Concluídas, uma linha por tarefa → contagens.
+    temporal   = uma linha por sessão, com a data real → horas, questões e acertos.
     """
     if analisavel.empty:
         st.info("Sem dados analisáveis."); return
 
     # Usa df_total quando disponível para progresso correto; senão cai em analisavel
     df_prog = df_total if df_total is not None and not df_total.empty else analisavel
+    base_h  = temporal if temporal is not None and not temporal.empty else analisavel
 
     # Progresso: todos os status por disciplina
     prog = df_prog.groupby("disciplina", as_index=False).agg(
@@ -2868,13 +3192,18 @@ def _aba_disciplinas(analisavel, df_total=None):
         lambda r: r["concl_disc"] / r["total_disc"] * 100 if r["total_disc"] else 0, axis=1
     )
 
-    # Horas / questões / desempenho: apenas analisável
-    perf = analisavel.groupby("disciplina", as_index=False).agg(
+    # Horas / questões / desempenho: nível de sessão, para o período recortar certo
+    perf = base_h.groupby("disciplina", as_index=False).agg(
         horas=("ch_efetiva", "sum"),
         questoes=("qtd_questoes_feitas", "sum"),
         acertos=("qtd_acertos", "sum"),
-        tarefas_anal=("tarefa_id", "count"),
     )
+    # Tarefas analisáveis continuam vindo de analisavel: no frame temporal uma
+    # tarefa estudada em vários dias apareceria várias vezes.
+    perf = perf.merge(
+        analisavel.groupby("disciplina", as_index=False).agg(tarefas_anal=("tarefa_id", "count")),
+        on="disciplina", how="outer",
+    ).fillna(0)
     perf["desempenho"] = perf.apply(
         lambda r: r["acertos"] / r["questoes"] * 100 if r["questoes"] else 0, axis=1
     )
@@ -2892,44 +3221,80 @@ def _aba_disciplinas(analisavel, df_total=None):
         d = disc.sort_values("progresso")
         fig = go.Figure(go.Bar(
             x=d["progresso"], y=d["disciplina"], orientation="h",
-            text=d["progresso"].map(lambda v: f"{v:.0f}%"), textposition="outside",
+            text=[f"{p:.0f}%  ({int(c)}/{int(t)})"
+                  for p, c, t in zip(d["progresso"], d["concl_disc"], d["total_disc"])],
+            textposition="outside", textfont=dict(size=10),
             marker_color=d["progresso"].map(
                 lambda v: "#22c55e" if v >= 80 else ("#f59e0b" if v >= 40 else "#ef4444")
             ),
+            hovertemplate="%{y}<br>%{x:.1f}% concluído<extra></extra>",
         ))
-        fig.update_layout(title="Progresso por disciplina (% de tarefas concluídas)")
-        st.plotly_chart(fig_layout(fig, max(280, len(disc) * 36)), use_container_width=True)
+        # Escala pelo maior valor, com folga para o rótulo. Fixar 0–100 achataria
+        # todas as barras num plano em que o progresso real mal passa de 20%.
+        topo = min(105, max(10, float(d["progresso"].max()) * 1.9))
+        fig.update_layout(
+            title="Progresso por disciplina (% de tarefas concluídas)",
+            xaxis=dict(range=[0, topo], title="% concluído"),
+        )
+        st.plotly_chart(fig_layout(fig, max(300, len(disc) * 34)), use_container_width=True)
 
     with col_b:
         render_html(_tooltip_grafico(
-            "Barras = horas estudadas (eixo esquerdo). "
-            "Linha = taxa de acerto em questões (eixo direito, 0–100%). "
-            "Disciplinas com muitas horas e baixo desempenho indicam estudo ineficiente."
+            "Cada bolha é uma disciplina. Eixo horizontal = horas estudadas, "
+            "eixo vertical = taxa de acerto, tamanho = volume de questões. "
+            "Canto inferior direito = muitas horas e pouco acerto, onde o estudo "
+            "está rendendo menos. A linha tracejada marca 70% de acerto. "
+            "Só aparecem disciplinas com questões respondidas."
         ))
-        fig = go.Figure()
-        fig.add_trace(go.Bar(
-            name="Horas", x=disc["disciplina"], y=disc["horas"], marker_color="#3b82f6"
-        ))
-        fig.add_trace(go.Scatter(
-            name="Desempenho (%)", x=disc["disciplina"], y=disc["desempenho"],
-            mode="lines+markers", marker_color="#f59e0b",
-            yaxis="y2", line=dict(width=2),
-        ))
-        fig.update_layout(
-            title="Horas × Desempenho",
-            yaxis2=dict(overlaying="y", side="right", range=[0, 100]),
-        )
-        st.plotly_chart(fig_layout(fig, 300), use_container_width=True)
+        # Antes eram barras de horas + linha de % com eixo duplo e os nomes das
+        # disciplinas no eixo x. Com nomes longos os rótulos se sobrepunham e a
+        # relação "muitas horas, pouco acerto" — o que o gráfico quer mostrar —
+        # exigia cruzar duas escalas de cabeça. A dispersão mostra isso direto.
+        bolhas = disc[disc["questoes"] > 0].copy()
+        if bolhas.empty:
+            st.plotly_chart(grafico_vazio("Nenhuma disciplina com questões respondidas."),
+                            use_container_width=True)
+        else:
+            fig = go.Figure(go.Scatter(
+                x=bolhas["horas"], y=bolhas["desempenho"],
+                mode="markers+text",
+                text=bolhas["disciplina"].map(lambda s: quebrar_texto(str(s), 22)),
+                textposition="top center", textfont=dict(size=10, color="#475569"),
+                marker=dict(
+                    size=bolhas["questoes"], sizemode="area",
+                    sizeref=2.0 * max(bolhas["questoes"].max(), 1) / (46.0 ** 2),
+                    sizemin=8, color="#3b82f6", opacity=.75,
+                    line=dict(color="#1e40af", width=1),
+                ),
+                hovertemplate=("<b>%{customdata[0]}</b><br>%{x:.1f} horas"
+                               "<br>%{y:.1f}% de acerto<br>%{customdata[1]} questões<extra></extra>"),
+                customdata=list(zip(bolhas["disciplina"], bolhas["questoes"].astype(int))),
+            ))
+            fig.add_hline(y=70, line=dict(color="#f59e0b", width=1, dash="dot"),
+                          annotation_text="70%", annotation_position="right",
+                          annotation_font=dict(size=10, color="#b45309"))
+            fig.update_layout(
+                title="Onde as horas estão rendendo",
+                xaxis=dict(title="Horas estudadas", rangemode="tozero"),
+                yaxis=dict(title="Taxa de acerto (%)", range=[0, 105]),
+            )
+            st.plotly_chart(fig_layout(fig, 380), use_container_width=True)
 
-    if len(disc) >= 3:
+    # Só disciplinas com questões respondidas. Com o denominador zerado o
+    # desempenho vira 0% e a disciplina aparecia no radar como se o aluno
+    # tivesse errado tudo — eram 7 de 12 no caso real, retraindo o polígono
+    # inteiro por falta de dado, não por falta de acerto.
+    disc_desemp = disc[disc["questoes"] > 0]
+    if len(disc_desemp) >= 3:
         render_html(_tooltip_grafico(
             "Radar comparando a taxa de acerto (%) de cada disciplina. "
             "Disciplinas mais distantes do centro têm melhor desempenho. "
-            "Áreas retraídas indicam onde concentrar esforços de revisão."
+            "Só entram disciplinas com questões respondidas — sem questões não há "
+            "taxa de acerto, e um 0% ali significaria ausência de dado, não erro."
         ))
         fig_r = go.Figure(go.Scatterpolar(
-            r=disc["desempenho"].tolist() + [disc["desempenho"].tolist()[0]],
-            theta=disc["disciplina"].tolist() + [disc["disciplina"].tolist()[0]],
+            r=disc_desemp["desempenho"].tolist() + [disc_desemp["desempenho"].tolist()[0]],
+            theta=disc_desemp["disciplina"].tolist() + [disc_desemp["disciplina"].tolist()[0]],
             fill="toself", fillcolor="rgba(59,130,246,0.15)",
             line=dict(color="#3b82f6", width=2),
         ))
@@ -2950,19 +3315,41 @@ def _aba_disciplinas(analisavel, df_total=None):
     )
 
 
-def _aba_evolucao(analisavel):
-    if analisavel.empty or "data_ref" not in analisavel.columns:
+def _aba_evolucao(analisavel, temporal=None):
+    """
+    Todo gráfico desta aba é série temporal, então a base são as SESSÕES: cada uma
+    com a data em que aconteceu. Usar `analisavel` empilhava as horas inteiras de
+    uma tarefa no dia em que ela terminou.
+    As conclusões por semana continuam vindo de `analisavel`, porque ali a data de
+    execução é justamente a data em que a tarefa foi concluída.
+    """
+    base = temporal if temporal is not None and not temporal.empty else analisavel
+    if base.empty or "data_ref" not in base.columns:
         st.info("Sem dados de evolução."); return
-    evo = analisavel.dropna(subset=["data_ref"]).copy()
+    evo = base.dropna(subset=["data_ref"]).copy()
     if evo.empty:
         st.info("Sem datas de execução."); return
     evo["dia"] = evo["data_ref"].dt.date
-    diario = evo.groupby("dia", as_index=False).agg(horas=("ch_efetiva","sum"), tarefas=("tarefa_id","count"))
+    diario = evo.groupby("dia", as_index=False).agg(
+        horas=("ch_efetiva","sum"), tarefas=("tarefa_id","nunique"))
+
+    # Preenche os dias sem estudo com zero antes da média móvel.
+    # Sem isto o rolling(7) andava sobre LINHAS, não sobre dias: 42 dias com
+    # registro espalhados por 206 dias corridos faziam a "média de 7 dias"
+    # cobrir semanas inteiras e ignorar todas as pausas, inflando a linha.
     diario["dia_ts"] = pd.to_datetime(diario["dia"])
+    calendario = pd.date_range(diario["dia_ts"].min(), diario["dia_ts"].max(), freq="D")
+    diario = (diario.set_index("dia_ts")
+                    .reindex(calendario)
+                    .rename_axis("dia_ts")
+                    .reset_index())
+    diario["horas"] = diario["horas"].fillna(0)
+    diario["tarefas"] = diario["tarefas"].fillna(0)
     diario["media7"] = diario["horas"].rolling(7, min_periods=1).mean()
     render_html(_tooltip_grafico(
-        "Barras = horas estudadas por dia. Linha pontilhada = média móvel dos últimos 7 dias. "
-        "A média móvel suaviza oscilações e revela a tendência real do ritmo de estudo. "
+        "Barras = horas estudadas por dia. Linha pontilhada = média móvel de 7 dias corridos. "
+        "Dias sem estudo entram como zero, então a linha cai durante as pausas — "
+        "é a média por dia de calendário, não por dia estudado. "
         "Quando a média sobe: ritmo crescente. Quando desce: possível desaceleração."
     ))
     fig = go.Figure()
@@ -2972,42 +3359,97 @@ def _aba_evolucao(analisavel):
     st.plotly_chart(fig_layout(fig, 300), use_container_width=True)
     col_a, col_b = st.columns(2)
     with col_a:
-        sem = evo.set_index("data_ref").resample("W").agg(horas=("ch_efetiva","sum"), concluidas=("status", lambda s:(s==STATUS_CONCLUIDA).sum())).reset_index()
-        sem["label"] = sem["data_ref"].dt.strftime("Sem %d/%m")
+        sem = (evo.set_index("data_ref").resample("W")
+                  .agg(horas=("ch_efetiva","sum")).reset_index())
+        conc_sem = analisavel.dropna(subset=["data_ref"]).copy()
+        if not conc_sem.empty:
+            conc_sem = (conc_sem.set_index("data_ref").resample("W")
+                        .agg(concluidas=("status", lambda x:(x==STATUS_CONCLUIDA).sum()))
+                        .reset_index())
+            sem = sem.merge(conc_sem, on="data_ref", how="left")
+        if "concluidas" not in sem.columns:
+            sem["concluidas"] = 0
+        sem["concluidas"] = sem["concluidas"].fillna(0)
         if not sem.empty:
             render_html(_tooltip_grafico(
-                "Barras = horas por semana. Linha = tarefas concluídas na mesma semana (eixo direito). "
-                "Permite ver se semanas com mais horas resultam em mais conclusões — ou se há problema de eficiência."
+                "Barras = horas por semana (eixo esquerdo). "
+                "Linha = tarefas concluídas na mesma semana (eixo direito). "
+                "Semanas com muitas horas e poucas conclusões indicam tarefas longas "
+                "ou dificuldade de fechar o que foi começado."
             ))
+            # Eixo de datas em vez de rótulos "Sem dd/mm": com 30 semanas os textos
+            # se sobrepunham. Num eixo temporal o Plotly escolhe a densidade de ticks.
             fig2 = go.Figure()
-            fig2.add_trace(go.Bar(x=sem["label"], y=sem["horas"], name="Horas", marker_color="#3b82f6"))
-            fig2.add_trace(go.Scatter(x=sem["label"], y=sem["concluidas"], name="Concluídas", mode="lines+markers", yaxis="y2", marker_color="#22c55e", line=dict(width=2)))
-            fig2.update_layout(title="Horas × Conclusões semanais", yaxis2=dict(overlaying="y", side="right"))
-            st.plotly_chart(fig_layout(fig2, 300), use_container_width=True)
+            fig2.add_trace(go.Bar(
+                x=sem["data_ref"], y=sem["horas"], name="Horas", marker_color="#3b82f6",
+                hovertemplate="Semana de %{x|%d/%m}<br>%{y:.2f}h<extra></extra>"))
+            fig2.add_trace(go.Scatter(
+                x=sem["data_ref"], y=sem["concluidas"], name="Concluídas",
+                mode="lines+markers", yaxis="y2", marker_color="#22c55e", line=dict(width=2),
+                hovertemplate="Semana de %{x|%d/%m}<br>%{y:.0f} concluída(s)<extra></extra>"))
+            fig2.update_layout(
+                title="Horas × Conclusões semanais",
+                xaxis=dict(type="date", tickformat="%d/%m", title="Semana"),
+                yaxis=dict(title="Horas"),
+                yaxis2=dict(overlaying="y", side="right", rangemode="tozero",
+                            showgrid=False, title="Concluídas"),
+            )
+            st.plotly_chart(fig_layout(fig2, 320), use_container_width=True)
     with col_b:
         ordem_dias = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]
         labels_dias = {"Monday":"Seg","Tuesday":"Ter","Wednesday":"Qua","Thursday":"Qui","Friday":"Sex","Saturday":"Sáb","Sunday":"Dom"}
         evo["dia_semana"] = evo["data_ref"].dt.day_name()
-        ds = evo.groupby("dia_semana", as_index=False).agg(horas=("ch_efetiva","sum"))
+        # Junto das horas vai a contagem de DIAS distintos. Sem ela, "1h" na segunda
+        # se lê como "estudou pouco nas segundas", quando o caso real era "estudou
+        # numa única segunda-feira em sete meses". São diagnósticos diferentes.
+        ds = evo.groupby("dia_semana", as_index=False).agg(
+            horas=("ch_efetiva", "sum"),
+            dias=("data_ref", lambda s: s.dt.date.nunique()),
+        )
         ds = ds[ds["dia_semana"].isin(ordem_dias)]
+        # Dias da semana sem nenhum estudo precisam aparecer como zero
+        faltando = [d for d in ordem_dias if d not in set(ds["dia_semana"])]
+        if faltando:
+            ds = pd.concat([ds, pd.DataFrame({"dia_semana": faltando, "horas": 0, "dias": 0})],
+                           ignore_index=True)
         ds["dia_semana"] = pd.Categorical(ds["dia_semana"], categories=ordem_dias, ordered=True)
         ds = ds.sort_values("dia_semana")
         ds["label"] = ds["dia_semana"].map(labels_dias)
+        ds["media"] = ds.apply(lambda r: r["horas"] / r["dias"] if r["dias"] else 0, axis=1)
         if not ds.empty:
             render_html(_tooltip_grafico(
-                "Horas totais acumuladas em cada dia da semana ao longo de todo o período. "
-                "A barra verde destaca o dia com mais horas — provavelmente o dia de maior rendimento. "
-                "Útil para planejar os dias de estudo mais intenso."
+                "Horas acumuladas em cada dia da semana ao longo de todo o período — "
+                "não é a média de uma semana. O número entre parênteses é em quantos "
+                "dias distintos daquele dia da semana houve estudo. "
+                "Uma barra baixa com poucos dias significa que o aluno raramente estuda "
+                "naquele dia; baixa com muitos dias significa sessões curtas. "
+                "A barra verde é o dia com mais horas acumuladas."
             ))
             fig3 = go.Figure(go.Bar(
                 x=ds["label"], y=ds["horas"],
-                marker_color=["#22c55e" if h==ds["horas"].max() else "#3b82f6" for h in ds["horas"]],
-                text=ds["horas"].map(lambda v: horas_para_hm(v)), textposition="outside"))
-            fig3.update_layout(title="Distribuição por dia da semana")
-            st.plotly_chart(fig_layout(fig3, 300), use_container_width=True)
+                marker_color=["#22c55e" if h == ds["horas"].max() and h > 0 else "#3b82f6"
+                              for h in ds["horas"]],
+                text=[f"{horas_para_hm(h)}<br><span style='font-size:9px;color:#64748b'>"
+                      f"{int(d)} dia(s)</span>" if h > 0 else ""
+                      for h, d in zip(ds["horas"], ds["dias"])],
+                textposition="outside",
+                customdata=list(zip(ds["dias"].astype(int), ds["media"])),
+                hovertemplate=("%{x}<br>%{y:.2f}h no total"
+                               "<br>%{customdata[0]} dia(s) com estudo"
+                               "<br>média de %{customdata[1]:.2f}h por dia estudado<extra></extra>"),
+            ))
+            fig3.update_layout(
+                title="Distribuição por dia da semana (acumulado do período)",
+                yaxis=dict(title="Horas acumuladas"),
+            )
+            fig3.update_yaxes(range=[0, float(ds["horas"].max() or 1) * 1.28])
+            st.plotly_chart(fig_layout(fig3, 330), use_container_width=True)
 
 
-def _aba_gestao_tempo(analisavel):
+def _aba_gestao_tempo(analisavel, temporal=None):
+    """Distribuição de horas — base em sessões, cada uma com o próprio tipo e data."""
+    base = temporal if temporal is not None and not temporal.empty else analisavel
+    analisavel = base
     if analisavel.empty:
         st.info("Sem dados para análise de tempo."); return
     col_a, col_b, col_c = st.columns(3)
@@ -3056,14 +3498,25 @@ def _aba_gestao_tempo(analisavel):
             st.plotly_chart(grafico_vazio("Sem dados de questões."), use_container_width=True)
 
 
-def _aba_ranking(analisavel):
+def _aba_ranking(analisavel, temporal=None):
+    """
+    Horas, questões e dias ativos saem das sessões; conclusões saem de `analisavel`,
+    que tem uma linha por tarefa. Misturar as duas coisas numa agregação só faria a
+    contagem de tarefas repetir a cada sessão.
+    """
     if analisavel.empty:
         st.info("Sem dados para ranking."); return
-    ag = analisavel.groupby("aluno", as_index=False).agg(
-        horas=("ch_efetiva","sum"), concluidas=("status", lambda s:(s==STATUS_CONCLUIDA).sum()),
+    base = temporal if temporal is not None and not temporal.empty else analisavel
+
+    ag = base.groupby("aluno", as_index=False).agg(
+        horas=("ch_efetiva","sum"),
         questoes=("qtd_questoes_feitas","sum"), acertos=("qtd_acertos","sum"),
         dias=("data_ref", lambda s: s.dropna().dt.date.nunique()),
     )
+    conc = analisavel.groupby("aluno", as_index=False).agg(
+        concluidas=("status", lambda s:(s==STATUS_CONCLUIDA).sum()),
+    )
+    ag = ag.merge(conc, on="aluno", how="outer").fillna(0)
     ag["desempenho"]   = ag.apply(lambda r: r["acertos"]/r["questoes"]*100 if r["questoes"] else 0, axis=1)
     ag["produtividade"] = ag.apply(lambda r: r["concluidas"]/r["horas"] if r["horas"] else 0, axis=1)
 
@@ -3097,7 +3550,7 @@ def _aba_ranking(analisavel):
         use_container_width=True, hide_index=True)
 
 
-def _aba_analise_ia(df_escopo, df_periodo, visao, kpis):
+def _aba_analise_ia(df_escopo, df_periodo, visao, kpis, inicio_periodo=None, fim_periodo=None):
     analisavel = kpis["analisavel"]
     if analisavel.empty:
         st.info("Sem atividades para análise.")
@@ -3118,7 +3571,11 @@ def _aba_analise_ia(df_escopo, df_periodo, visao, kpis):
         grupo["data_ref"] = pd.to_datetime(
             grupo.get("data_execucao", pd.Series(dtype=str)), errors="coerce"
         )
-        kpis_al  = calcular_kpis_avancados(grupo_esc, grupo_per)
+        # O período precisa ser repassado: sem ele o divisor de dias úteis é outro
+        # e a aba mostrava média diária diferente da dos cards, para o mesmo aluno.
+        kpis_al  = calcular_kpis_avancados(
+            grupo_esc, grupo_per, inicio_periodo, fim_periodo
+        )
         insights = gerar_insights(grupo, kpis_al, nome_aluno)
 
         with st.expander(f"🧠 {nome_aluno}", expanded=(len(alunos_lista) == 1)):
@@ -3132,49 +3589,74 @@ def _aba_analise_ia(df_escopo, df_periodo, visao, kpis):
                 "Sequência", f"{kpis_al['sequencia']} dias",
                 delta=(f"{kpis_al['dias_sem_estudar']}d sem estudar"
                        if kpis_al["dias_sem_estudar"] > 0 else "Estudou hoje"),
+                help="Dias consecutivos com registro, contados a partir do último "
+                     "dia estudado. O delta mostra há quantos dias foi esse último registro.",
             )
             render_html('<div class="section-title">Análise automática</div>')
             for ins in insights:
                 render_html(insight_card(ins["tipo"], ins["icone"], ins["titulo"], ins["texto"]))
 
             ana_al = kpis_al["analisavel"]
-            if not ana_al.empty and "data_ref" in ana_al.columns:
-                evo = ana_al.dropna(subset=["data_ref"]).copy()
+            tmp_al = kpis_al.get("temporal")
+            base_al = tmp_al if tmp_al is not None and not tmp_al.empty else ana_al
+            if not base_al.empty and "data_ref" in base_al.columns:
+                evo = base_al.dropna(subset=["data_ref"]).copy()
                 if not evo.empty:
-                    sem = (
-                        evo.set_index("data_ref")
-                        .resample("W")
-                        .agg(horas=("ch_efetiva", "sum"),
-                             concluidas=("status", lambda s: (s == STATUS_CONCLUIDA).sum()))
-                        .reset_index()
-                    )
-                    sem["label"] = sem["data_ref"].dt.strftime("Sem %d/%m")
+                    # horas pelas sessões, conclusões pelas execuções
+                    sem = (evo.set_index("data_ref").resample("W")
+                             .agg(horas=("ch_efetiva", "sum")).reset_index())
+                    ca = ana_al.dropna(subset=["data_ref"])
+                    if not ca.empty:
+                        ca = (ca.set_index("data_ref").resample("W")
+                                .agg(concluidas=("status", lambda x: (x == STATUS_CONCLUIDA).sum()))
+                                .reset_index())
+                        sem = sem.merge(ca, on="data_ref", how="left")
+                    if "concluidas" not in sem.columns:
+                        sem["concluidas"] = 0
+                    sem["concluidas"] = sem["concluidas"].fillna(0)
                     if len(sem) > 1:
                         fig = go.Figure()
-                        fig.add_trace(go.Bar(x=sem["label"], y=sem["horas"],
-                            name="Horas", marker_color="#3b82f6"))
-                        fig.add_trace(go.Scatter(x=sem["label"], y=sem["concluidas"],
-                            name="Concluídas", mode="lines+markers",
-                            yaxis="y2", marker_color="#22c55e", line=dict(width=2)))
+                        fig.add_trace(go.Bar(
+                            x=sem["data_ref"], y=sem["horas"], name="Horas",
+                            marker_color="#3b82f6",
+                            hovertemplate="Semana de %{x|%d/%m}<br>%{y:.2f}h<extra></extra>"))
+                        fig.add_trace(go.Scatter(
+                            x=sem["data_ref"], y=sem["concluidas"], name="Concluídas",
+                            mode="lines+markers", yaxis="y2", marker_color="#22c55e",
+                            line=dict(width=2),
+                            hovertemplate="Semana de %{x|%d/%m}<br>%{y:.0f} concluída(s)<extra></extra>"))
                         fig.update_layout(
                             title=f"Evolução semanal — {nome_aluno}",
-                            yaxis2=dict(overlaying="y", side="right"),
+                            xaxis=dict(type="date", tickformat="%d/%m"),
+                            yaxis=dict(title="Horas"),
+                            yaxis2=dict(overlaying="y", side="right", rangemode="tozero",
+                                        showgrid=False),
                         )
-                        st.plotly_chart(fig_layout(fig, 240), use_container_width=True)
+                        st.plotly_chart(fig_layout(fig, 280), use_container_width=True)
 
             if not ana_al.empty and "disciplina" in ana_al.columns:
-                da = ana_al.groupby("disciplina", as_index=False).agg(
+                # questões e acertos pelas sessões do período; contagens por tarefa
+                da = base_al.groupby("disciplina", as_index=False).agg(
                     questoes=("qtd_questoes_feitas", "sum"),
                     acertos=("qtd_acertos", "sum"),
-                    tarefas=("tarefa_id", "count"),
-                    concluidas=("status", lambda s: (s == STATUS_CONCLUIDA).sum()),
                 )
+                da = da.merge(
+                    ana_al.groupby("disciplina", as_index=False).agg(
+                        iniciadas=("tarefa_id", "count"),
+                        concluidas=("status", lambda s: (s == STATUS_CONCLUIDA).sum()),
+                    ),
+                    on="disciplina", how="outer",
+                ).fillna(0)
                 da["desempenho"] = da.apply(
                     lambda r: r["acertos"] / r["questoes"] * 100 if r["questoes"] else 0, axis=1)
+                # Progresso sobre o total da disciplina no escopo do aluno, não
+                # sobre as tarefas que ele já iniciou.
+                total_disc = grupo_esc.groupby("disciplina")["tarefa_id"].count()
+                da["tarefas"] = da["disciplina"].map(total_disc).fillna(da["iniciadas"]).astype(int)
                 da["progresso"]  = da.apply(
                     lambda r: r["concluidas"] / r["tarefas"] * 100 if r["tarefas"] else 0, axis=1)
                 frageis  = da[(da["questoes"] > 0) & (da["desempenho"] < 70)].sort_values("desempenho")
-                criticas = da[da["progresso"] < 30].sort_values("progresso")
+                criticas = da[(da["progresso"] < 30) & (da["iniciadas"] >= 3)].sort_values("progresso")
                 if not frageis.empty or not criticas.empty:
                     render_html('<div class="section-title">Disciplinas que precisam de atenção</div>')
                     fc1, fc2 = st.columns(2)
@@ -3237,18 +3719,27 @@ def _titulo_secao(label: str, tooltip: str = "", periodo: str = "") -> None:
 
 
 def _resumo_15dias(df_total: pd.DataFrame) -> None:
-    """Bloco de KPIs calculado exclusivamente sobre os últimos 15 dias."""
+    """
+    KPIs dos últimos 15 dias. Horas, questões, acertos e dias ativos vêm das
+    sessões da janela; conclusões vêm das execuções, porque `data_execucao` é a
+    data em que a tarefa foi de fato concluída.
+    """
     hoje  = date.today()
     ini15 = hoje - timedelta(days=14)
     df15  = df_total[df_total["data_ref"].dt.date >= ini15].copy()
     ana15 = df15[df15["status"].isin(STATUS_ANALISE)]
 
-    h15    = float(ana15["ch_efetiva"].sum())
-    q15    = int(ana15["qtd_questoes_feitas"].sum())
-    ac15   = int(ana15["qtd_acertos"].sum())
+    sess15 = _sessoes_do_escopo(df_total, ini15, hoje)
+    pares  = _pares_aluno_tarefa(_sessoes_do_escopo(df_total))
+    leg15  = _sem_sessao(ana15, pares)
+    base15 = _frame_temporal(sess15, leg15)
+
+    h15    = float(base15["ch_efetiva"].sum())
+    q15    = int(base15["qtd_questoes_feitas"].sum())
+    ac15   = int(base15["qtd_acertos"].sum())
     des15  = ac15 / q15 * 100 if q15 else 0
     conc15 = int((ana15["status"] == STATUS_CONCLUIDA).sum())
-    dias15 = ana15["data_ref"].dropna().dt.date.nunique()
+    dias15 = base15["data_ref"].dropna().dt.date.nunique()
 
     _titulo_secao(
         "Últimos 15 dias",
@@ -3267,7 +3758,7 @@ def _resumo_15dias(df_total: pd.DataFrame) -> None:
                 "Total de horas de estudo registradas nos últimos 15 dias. "
                 "Inclui atividades Em andamento e Concluídas. "
                 "Filtros de aluno e disciplina são respeitados; filtro de período não se aplica aqui. "
-                "Fórmula: soma de ch_efetiva das execuções com data ≥ hoje − 14 dias."
+                "Fórmula: soma das sessões de estudo com data ≥ hoje − 14 dias."
             ),
         ),
         kpi_card(
@@ -3436,6 +3927,13 @@ def _dashboard_comparativo(
             per_anal_todos.get("data_execucao", pd.Series(dtype=str)), errors="coerce")
     per_anal_todos = per_anal_todos[per_anal_todos["aluno"].isin(alunos_sel)]
 
+    # Base temporal do grupo: uma linha por sessão, já recortada por escopo e período
+    # dentro de calcular_kpis_avancados de cada aluno.
+    _temporais = [d["kpis"]["temporal"] for d in dados_alunos
+                  if d["kpis"].get("temporal") is not None and not d["kpis"]["temporal"].empty]
+    temporal_todos = (pd.concat(_temporais, ignore_index=True)
+                      if _temporais else pd.DataFrame(columns=_COLS_TEMPORAL))
+
     # ── Gráficos ──
     abas = st.tabs([
         "📊 Horas & Progresso",
@@ -3529,7 +4027,9 @@ def _dashboard_comparativo(
                 total=("tarefa_id","count"),
                 concluidas=("status", lambda s:(s==STATUS_CONCLUIDA).sum()),
             )
-            dperf = per_an.groupby("disciplina", as_index=False).agg(
+            tmp_a = d["kpis"].get("temporal")
+            base_a = tmp_a if tmp_a is not None and not tmp_a.empty else per_an
+            dperf = base_a.groupby("disciplina", as_index=False).agg(
                 horas=("ch_efetiva","sum"),
                 questoes=("qtd_questoes_feitas","sum"),
                 acertos=("qtd_acertos","sum"),
@@ -3553,25 +4053,44 @@ def _dashboard_comparativo(
                     text=sub["progresso"].map(lambda v: f"{v:.0f}%"),
                     textposition="outside",
                 ))
+            # Escala adaptativa: com progresso real abaixo de 25%, um eixo fixo
+            # em 0–125 deixava as barras rentes ao chão e 80% do gráfico vazio.
+            topo_prog = min(125, max(12, float(df_disc["progresso"].max()) * 1.35))
             fig.update_layout(
                 title="Progresso por disciplina — por aluno (%)",
-                barmode="group", yaxis_range=[0, 125],
+                barmode="group",
+                yaxis=dict(range=[0, topo_prog], title="% concluído"),
             )
             st.plotly_chart(fig_layout(fig, max(300, len(disciplinas_u)*60)), use_container_width=True)
 
-            # Desempenho por disciplina
-            fig2 = go.Figure()
-            for i, d in enumerate(dados_alunos):
-                sub = df_disc[df_disc["Aluno"] == d["nome"]]
-                fig2.add_trace(go.Bar(
-                    name=d["nome"], x=sub["disciplina"], y=sub["desempenho"],
-                    marker_color=CORES_ALUNOS[i % len(CORES_ALUNOS)],
-                    text=sub["desempenho"].map(lambda v: f"{v:.0f}%"),
-                    textposition="outside",
+            # Desempenho por disciplina — só onde houve questões respondidas.
+            # Sem esse recorte, disciplina sem questão virava barra de 0% e lia-se
+            # como desempenho péssimo em vez de ausência de medida.
+            df_des = df_disc[df_disc["questoes"] > 0]
+            if not df_des.empty:
+                render_html(_tooltip_grafico(
+                    "Taxa de acerto por disciplina, separada por aluno. "
+                    "Aparecem apenas disciplinas em que o aluno já respondeu questões."
                 ))
-            fig2.update_layout(title="Desempenho por disciplina — por aluno (%)",
-                barmode="group", yaxis_range=[0, 125])
-            st.plotly_chart(fig_layout(fig2, max(300, len(disciplinas_u)*60)), use_container_width=True)
+                fig2 = go.Figure()
+                for i, d in enumerate(dados_alunos):
+                    sub = df_des[df_des["Aluno"] == d["nome"]]
+                    if sub.empty:
+                        continue
+                    fig2.add_trace(go.Bar(
+                        name=d["nome"], x=sub["disciplina"], y=sub["desempenho"],
+                        marker_color=CORES_ALUNOS[i % len(CORES_ALUNOS)],
+                        text=sub["desempenho"].map(lambda v: f"{v:.0f}%"),
+                        textposition="outside",
+                    ))
+                topo_des = min(125, max(40, float(df_des["desempenho"].max()) * 1.28))
+                fig2.update_layout(
+                    title="Desempenho por disciplina — por aluno (%)",
+                    barmode="group",
+                    yaxis=dict(range=[0, topo_des], title="Taxa de acerto (%)"),
+                )
+                st.plotly_chart(fig_layout(fig2, max(300, df_des["disciplina"].nunique()*60)),
+                                use_container_width=True)
 
             st.dataframe(
                 df_disc[["Aluno","disciplina","progresso","desempenho","horas","concluidas","total"]].rename(
@@ -3582,39 +4101,57 @@ def _dashboard_comparativo(
 
     with abas[2]:
         render_html(_tooltip_grafico(
-            "Evolução diária e semanal de horas por aluno. "
-            "Cada linha/barra representa um aluno separadamente."
+            "Ritmo de estudo por aluno. A linha é a média móvel de 7 dias corridos: "
+            "dias sem estudo entram como zero, então a linha desce durante as pausas. "
+            "Ligar só os dias estudados desenharia uma reta por cima de semanas paradas "
+            "e daria a impressão de ritmo constante onde não houve estudo. "
+            "Abaixo, o total de horas por semana."
         ))
-        evo = per_anal_todos.dropna(subset=["data_ref"]).copy()
+        evo = (temporal_todos if not temporal_todos.empty else per_anal_todos)
+        evo = evo.dropna(subset=["data_ref"]).copy()
         if not evo.empty:
             evo["dia"] = evo["data_ref"].dt.date
             diario = evo.groupby(["dia","aluno"], as_index=False).agg(horas=("ch_efetiva","sum"))
+            calend = pd.date_range(
+                pd.to_datetime(diario["dia"]).min(), pd.to_datetime(diario["dia"]).max(), freq="D"
+            )
             fig = go.Figure()
             for i, d in enumerate(dados_alunos):
                 sub = diario[diario["aluno"] == d["nome"]].sort_values("dia")
-                if not sub.empty:
-                    fig.add_trace(go.Scatter(
-                        x=sub["dia"], y=sub["horas"], mode="lines+markers",
-                        name=d["nome"], line=dict(color=CORES_ALUNOS[i%len(CORES_ALUNOS)], width=2),
-                    ))
-            fig.update_layout(title="Evolução diária de horas por aluno")
+                if sub.empty:
+                    continue
+                serie = (sub.set_index(pd.to_datetime(sub["dia"]))["horas"]
+                            .reindex(calend, fill_value=0))
+                fig.add_trace(go.Scatter(
+                    x=calend, y=serie.rolling(7, min_periods=1).mean(), mode="lines",
+                    name=d["nome"], line=dict(color=CORES_ALUNOS[i%len(CORES_ALUNOS)], width=2),
+                ))
+            fig.update_layout(
+                title="Ritmo diário por aluno — média móvel de 7 dias",
+                yaxis_title="Horas/dia",
+            )
             st.plotly_chart(fig_layout(fig, 320), use_container_width=True)
 
             semanal = (evo.groupby(["aluno","data_ref"])
                 .agg(horas=("ch_efetiva","sum"))
                 .reset_index())
             semanal = semanal.set_index("data_ref").groupby("aluno").resample("W")["horas"].sum().reset_index()
-            semanal["semana"] = semanal["data_ref"].dt.strftime("Sem %d/%m")
             fig2 = go.Figure()
             for i, d in enumerate(dados_alunos):
                 sub = semanal[semanal["aluno"] == d["nome"]]
                 if not sub.empty:
                     fig2.add_trace(go.Bar(
-                        name=d["nome"], x=sub["semana"], y=sub["horas"],
+                        name=d["nome"], x=sub["data_ref"], y=sub["horas"],
                         marker_color=CORES_ALUNOS[i%len(CORES_ALUNOS)],
+                        hovertemplate=("<b>"+str(d["nome"])+"</b><br>Semana de %{x|%d/%m}"
+                                       "<br>%{y:.2f}h<extra></extra>"),
                     ))
-            fig2.update_layout(title="Horas semanais por aluno", barmode="group")
-            st.plotly_chart(fig_layout(fig2, 300), use_container_width=True)
+            fig2.update_layout(
+                title="Horas semanais por aluno", barmode="group",
+                xaxis=dict(type="date", tickformat="%d/%m", title="Semana"),
+                yaxis=dict(title="Horas"),
+            )
+            st.plotly_chart(fig_layout(fig2, 320), use_container_width=True)
         else:
             st.info("Sem dados de evolução para o período selecionado.")
 
@@ -3664,7 +4201,10 @@ def _dashboard_comparativo(
             "Valores calculados individualmente — não somados.",
             "Comparativo",
         )
-        _aba_ranking(per_anal_todos if not per_anal_todos.empty else df_escopo[df_escopo["status"].isin(STATUS_ANALISE)])
+        _aba_ranking(
+            per_anal_todos if not per_anal_todos.empty else df_escopo[df_escopo["status"].isin(STATUS_ANALISE)],
+            temporal=temporal_todos,
+        )
 
     with abas[5]:
         _titulo_secao(
@@ -3685,7 +4225,7 @@ def _dashboard_comparativo(
             '</p></div></div>'
         )
         kpis_grupo = calcular_kpis_avancados(df_escopo, df_periodo, inicio_periodo, fim_periodo)
-        _aba_analise_ia(df_escopo, df_periodo, alunos_sel, kpis_grupo)
+        _aba_analise_ia(df_escopo, df_periodo, alunos_sel, kpis_grupo, inicio_periodo, fim_periodo)
 
         if len(dados_alunos) > 1:
             st.markdown("---")
@@ -3830,33 +4370,33 @@ def dashboard():
     with abas[0]:
         _titulo_secao("Distribuição por status",
             "Quantas tarefas estão em cada status. Permite visualizar a fila de trabalho e o progresso geral.")
-        _aba_visao_geral(df_escopo, analisavel)
+        _aba_visao_geral(df_escopo, analisavel, temporal=kpis["temporal"])
 
     with abas[1]:
         _titulo_secao("Análise por disciplina",
             "Progresso usa o escopo total (sem filtro de período). "
             "Horas e desempenho respeitam o período selecionado.")
-        _aba_disciplinas(analisavel, df_total=df_escopo)
+        _aba_disciplinas(analisavel, df_total=df_escopo, temporal=kpis["temporal"])
 
     with abas[2]:
         _titulo_secao("Evolução temporal",
             "Gráficos de horas e conclusões ao longo do tempo.")
-        _aba_evolucao(analisavel)
+        _aba_evolucao(analisavel, temporal=kpis["temporal"])
 
     with abas[3]:
         _titulo_secao("Gestão do tempo",
             "Como as horas de estudo estão distribuídas entre tipos de atividade e disciplinas.")
-        _aba_gestao_tempo(analisavel)
+        _aba_gestao_tempo(analisavel, temporal=kpis["temporal"])
 
     with abas[4]:
         _titulo_secao("Rankings comparativos",
             "Classificação dos alunos por produtividade, consistência e desempenho.")
-        _aba_ranking(analisavel)
+        _aba_ranking(analisavel, temporal=kpis["temporal"])
 
     with abas[5]:
         _titulo_secao("Análise inteligente por aluno",
             "Insights automáticos: padrões, riscos, disciplinas frágeis e recomendações.")
-        _aba_analise_ia(df_escopo, df_periodo, visao, kpis)
+        _aba_analise_ia(df_escopo, df_periodo, visao, kpis, inicio_periodo, fim_periodo)
 
     with abas[6]:
         _titulo_secao("Todas as atividades",
@@ -4290,13 +4830,20 @@ def _rr_formulario(
     try:
         with st.spinner("Salvando…"):
             with conectar() as conn:
+                # Upsert, não UPDATE: se a tarefa ainda não tem vínculo com o
+                # aluno (planilha importada sem "Vincular tarefas pendentes"),
+                # um UPDATE afetaria zero linhas e o registro se perderia.
                 conn.execute(
-                    """UPDATE execucoes SET status=?, tipo_estudo=?, concluida=?,
-                       atualizado_em=CURRENT_TIMESTAMP
-                       WHERE aluno_id=? AND tarefa_id=?""",
-                    (novo_status, tipo_estudo,
-                     1 if novo_status == STATUS_CONCLUIDA else 0,
-                     aluno_id, tarefa_id),
+                    """INSERT INTO execucoes
+                           (aluno_id, tarefa_id, status, tipo_estudo, concluida, atualizado_em)
+                       VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                       ON CONFLICT(aluno_id, tarefa_id) DO UPDATE SET
+                           status        = excluded.status,
+                           tipo_estudo   = excluded.tipo_estudo,
+                           concluida     = excluded.concluida,
+                           atualizado_em = CURRENT_TIMESTAMP""",
+                    (aluno_id, tarefa_id, novo_status, tipo_estudo,
+                     1 if novo_status == STATUS_CONCLUIDA else 0),
                 )
                 tem_sessao = ch > 0 or questoes > 0
                 if tem_sessao:
@@ -4619,10 +5166,38 @@ def tela_tarefas():
             try:
                 with st.spinner("Salvando…"):
                  with conectar() as conn:
+                    # Tarefas cujas horas são derivadas de sessões registradas.
+                    # Editá-las aqui criaria divergência: o painel soma as sessões,
+                    # a grade mostraria outro número, e a próxima sessão registrada
+                    # sobrescreveria a edição sem avisar.
+                    com_sessao = {
+                        (int(t), float(h or 0), int(q or 0), int(a or 0))
+                        for t, h, q, a in conn.execute(
+                            """SELECT tarefa_id, COALESCE(SUM(ch_sessao),0),
+                                      COALESCE(SUM(qtd_questoes),0), COALESCE(SUM(qtd_acertos),0)
+                               FROM sessoes_estudo WHERE aluno_id = ?
+                               GROUP BY tarefa_id""",
+                            (aluno_id,),
+                        ).fetchall()
+                    }
+                    derivadas = {t: (h, q, a) for t, h, q, a in com_sessao}
+
                     for _, row in editado.iterrows():
                         if converter_inteiro(row["qtd_acertos"]) > converter_inteiro(row["qtd_questoes_feitas"]):
                             raise ValueError(f"Tarefa {row['tarefa']}: acertos maiores que questões.")
                         ch_float = hm_para_horas(int(row.get("ch_horas", 0)), int(row.get("ch_minutos", 0)))
+
+                        tid = int(row["tarefa_id"])
+                        if tid in derivadas:
+                            h_s, q_s, a_s = derivadas[tid]
+                            q_e = converter_inteiro(row["qtd_questoes_feitas"])
+                            a_e = converter_inteiro(row["qtd_acertos"])
+                            if abs(ch_float - h_s) > 0.005 or q_e != q_s or a_e != a_s:
+                                raise ValueError(
+                                    f"Tarefa {row['tarefa']}: horas, questões e acertos vêm das sessões "
+                                    f"registradas ({horas_para_hm(h_s)}, {q_s} questões, {a_s} acertos). "
+                                    "Edite a sessão em Registro rápido; aqui altere só status, tipo, data ou observações."
+                                )
                         upsert_execucao(
                             conn, aluno_id, int(row["tarefa_id"]),
                             converter_data(row["data_execucao"]),
@@ -4894,6 +5469,9 @@ def _excluir_aluno_cascade(aluno_id: int) -> str:
     with conectar() as conn:
         row = conn.execute("SELECT nome FROM alunos WHERE id = ?", (int(aluno_id),)).fetchone()
         nome = row[0] if row else str(aluno_id)
+        # sessoes_estudo não tem FK para alunos: sem este DELETE as sessões
+        # ficavam no banco para sempre, apontando para um aluno inexistente.
+        conn.execute("DELETE FROM sessoes_estudo WHERE aluno_id = ?", (int(aluno_id),))
         conn.execute("DELETE FROM execucoes WHERE aluno_id = ?", (int(aluno_id),))
         conn.execute("DELETE FROM alunos WHERE id = ? AND perfil = 'Aluno'", (int(aluno_id),))
     limpar_cache()
@@ -5132,7 +5710,6 @@ def tela_importacao():
     abas = st.tabs([
         "📋 Planilha de referência",
         "📊 Ciclo Consolidado (multi-aluno)",
-        "👤 Planilhas individuais (legado)",
     ])
 
     # ── Aba 1: Planilha de referência ──
@@ -5223,13 +5800,48 @@ def tela_importacao():
         )
 
         col_modo, col_btn = st.columns([2, 1])
+        # "acumular" é o padrão: "substituir" apaga TODO o histórico dos dois
+        # alunos do arquivo e antes vinha pré-selecionado, a um clique de distância.
         modo = col_modo.radio(
             "Modo de importação",
-            ["substituir", "acumular"],
-            format_func=lambda v: "🔄 Substituir execuções existentes" if v == "substituir" else "➕ Acumular (não apaga execuções anteriores)",
+            ["acumular", "substituir"],
+            format_func=lambda v: "➕ Acumular (não apaga execuções anteriores)" if v == "acumular" else "🔄 Substituir — APAGA o histórico dos alunos do arquivo",
             horizontal=True,
             key="cc_modo",
         )
+
+        confirma_subst = True
+        if modo == "substituir":
+            try:
+                resumo = consultar(
+                    """SELECT COUNT(*) AS execucoes,
+                              COALESCE(SUM(ch_efetiva), 0) AS horas,
+                              COALESCE(SUM(qtd_questoes_feitas), 0) AS questoes
+                       FROM execucoes
+                       WHERE ch_efetiva > 0 OR qtd_questoes_feitas > 0
+                          OR status <> 'NAO_INICIADA'"""
+                ).iloc[0]
+                n_sess = consultar("SELECT COUNT(*) AS n FROM sessoes_estudo").iloc[0]["n"]
+                render_html(
+                    '<div class="rule-warning" style="margin-bottom:10px">'
+                    '⚠️ <strong>Operação destrutiva.</strong> O modo Substituir apaga as execuções '
+                    'e as sessões de estudo dos alunos presentes no arquivo. '
+                    f'Hoje o banco tem <strong>{int(resumo["execucoes"])}</strong> execução(ões) com estudo, '
+                    f'<strong>{horas_para_hm(float(resumo["horas"]))}</strong>, '
+                    f'<strong>{int(resumo["questoes"])}</strong> questões e '
+                    f'<strong>{int(n_sess)}</strong> sessão(ões) registradas.'
+                    '</div>'
+                )
+            except Exception:
+                render_html(
+                    '<div class="rule-warning" style="margin-bottom:10px">'
+                    '⚠️ <strong>Operação destrutiva.</strong> O modo Substituir apaga execuções '
+                    'e sessões de estudo dos alunos presentes no arquivo.</div>'
+                )
+            confirma_subst = st.checkbox(
+                "Confirmo que quero apagar o histórico desses alunos antes de importar",
+                value=False, key="cc_confirma_subst",
+            )
 
         if arquivo_cc is not None:
             destino_cc = BASE_DIR / arquivo_cc.name
@@ -5248,6 +5860,12 @@ def tela_importacao():
                 pass
 
             if col_btn.button("▶ Importar", type="primary", use_container_width=True, key="cc_importar"):
+                if modo == "substituir" and not confirma_subst:
+                    render_html(
+                        '<div class="rule-error">❌ Marque a confirmação para usar o modo Substituir, '
+                        'ou troque para Acumular.</div>'
+                    )
+                    st.stop()
                 with st.spinner("Importando Ciclo Consolidado… aguarde."):
                     resultado = importar_ciclo_consolidado(destino_cc, modo=modo)
 
@@ -5264,24 +5882,6 @@ def tela_importacao():
                         f"**{resultado['registros']}** execuções gravadas."
                     )
                     st.rerun()
-
-    # ── Aba 3: Planilhas individuais (legado) ──
-    with abas[2]:
-        st.caption("Formato legado: um arquivo por aluno com aba CICLO_REG.")
-        arquivos = st.file_uploader(
-            "Planilhas individuais (.xlsx)",
-            type=["xlsx"],
-            accept_multiple_files=True,
-            key="ind_upload",
-        )
-        if arquivos and st.button("Importar planilhas individuais", type="primary", key="ind_importar"):
-            ok = 0
-            for arq in arquivos:
-                destino = BASE_DIR / arq.name
-                destino.write_bytes(arq.getbuffer())
-                ok += int(importar_execucoes_ciclo(destino))
-            _toast_sucesso(f"Planilhas processadas com sucesso: {ok}.")
-            st.rerun()
 
 
 # ─────────────────────────────────────────────

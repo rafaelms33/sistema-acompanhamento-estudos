@@ -19,3 +19,6 @@ producao.json
 
 # Logs
 *.log
+
+# Fila de exclusão manual
+_to_delete/
